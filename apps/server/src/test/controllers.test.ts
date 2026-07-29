@@ -4,7 +4,7 @@ import type { AdminService } from "../application/services/AdminService";
 import type { HandshakeService } from "../application/services/HandshakeService";
 import { adminPlugin, createAdminAuthMiddleware } from "../controllers/admin";
 import { handshakePlugin } from "../controllers/handshake";
-import { NotFoundError } from "../domain/errors";
+import { ConflictError, NotFoundError } from "../domain/errors";
 
 const createdAt = new Date("2026-01-01T00:00:00.000Z");
 const user = {
@@ -180,7 +180,10 @@ describe("admin controller", () => {
 			adminRequest("/admin/keys/missing", { method: "PATCH" }),
 		);
 		expect(missing.status).toBe(404);
-		expect(await missing.json()).toEqual({ error: "ApiKey not found" });
+		expect(await missing.json()).toEqual({
+			error: "ApiKey not found",
+			code: "NOT_FOUND",
+		});
 
 		const invalid = await app.handle(
 			adminRequest("/admin/users", {
@@ -190,6 +193,29 @@ describe("admin controller", () => {
 		);
 		expect(invalid.status).toBe(400);
 		expect(await invalid.json()).toHaveProperty("error");
+	});
+
+	test("publishes duplicate owner emails as safe 409 conflicts", async () => {
+		const service = {
+			createUser: mock(async () => {
+				throw new ConflictError("A user with this email already exists");
+			}),
+		} as unknown as AdminService;
+		const app = new Elysia().use(adminPlugin(service, ["admin-secret"]));
+		const response = await app.handle(
+			adminRequest("/admin/users", {
+				method: "POST",
+				body: JSON.stringify({
+					email: "duplicate@example.com",
+					name: "Owner",
+				}),
+			}),
+		);
+		expect(response.status).toBe(409);
+		expect(await response.json()).toEqual({
+			error: "A user with this email already exists",
+			code: "CONFLICT",
+		});
 	});
 });
 
@@ -211,6 +237,9 @@ describe("handshake controller", () => {
 		);
 
 		expect(response.status).toBe(404);
-		expect(await response.json()).toEqual({ error: "ApiKey not found" });
+		expect(await response.json()).toEqual({
+			error: "ApiKey not found",
+			code: "NOT_FOUND",
+		});
 	});
 });

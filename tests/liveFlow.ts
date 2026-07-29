@@ -254,7 +254,7 @@ try {
 	} catch (error) {
 		if (
 			!(error instanceof Error) ||
-			!error.message.includes("Invalid API key")
+			!error.message.includes("Invalid or revoked API key")
 		) {
 			throw error;
 		}

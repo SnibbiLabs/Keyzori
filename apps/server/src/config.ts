@@ -1,4 +1,5 @@
 import { isIP } from "node:net";
+import type { TrustedProxyHeader } from "./controllers/clientIp";
 
 export interface ServerConfig {
 	databaseUrl: string;
@@ -9,8 +10,11 @@ export interface ServerConfig {
 	port: number;
 	trustProxyHeaders: boolean;
 	trustedProxyCidrs: string[];
+	trustedProxyHeader: TrustedProxyHeader;
 	openapiEnabled: boolean;
 	rateLimitPerMinute: number;
+	licenseRateLimitPerMinute: number;
+	rateLimitPerIpPerMinute: number;
 	maxRequestBodyBytes: number;
 }
 
@@ -106,6 +110,18 @@ function integerValue(
 	return value;
 }
 
+function parseTrustedProxyHeaderMode(
+	environment: Record<string, string | undefined>,
+): TrustedProxyHeader {
+	const value = environment.TRUSTED_PROXY_HEADER?.trim() || "x-forwarded-for";
+	if (value !== "x-forwarded-for" && value !== "cf-connecting-ip") {
+		throw new Error(
+			"TRUSTED_PROXY_HEADER must be either x-forwarded-for or cf-connecting-ip.",
+		);
+	}
+	return value;
+}
+
 export function loadServerConfig(
 	environment: Record<string, string | undefined> = Bun.env,
 ): ServerConfig {
@@ -142,6 +158,7 @@ export function loadServerConfig(
 		port: integerValue(environment, "PORT", 3000, 1, 65_535),
 		trustProxyHeaders,
 		trustedProxyCidrs: trustedProxyCidrs(environment, trustProxyHeaders),
+		trustedProxyHeader: parseTrustedProxyHeaderMode(environment),
 		openapiEnabled: booleanValue(environment, "OPENAPI_ENABLED", true),
 		rateLimitPerMinute: integerValue(
 			environment,
@@ -149,6 +166,20 @@ export function loadServerConfig(
 			60,
 			1,
 			100_000,
+		),
+		licenseRateLimitPerMinute: integerValue(
+			environment,
+			"LICENSE_RATE_LIMIT_PER_MINUTE",
+			30,
+			1,
+			100_000,
+		),
+		rateLimitPerIpPerMinute: integerValue(
+			environment,
+			"RATE_LIMIT_PER_IP_PER_MINUTE",
+			6_000,
+			1,
+			1_000_000,
 		),
 		maxRequestBodyBytes: integerValue(
 			environment,

@@ -9,7 +9,10 @@ export interface HandshakeResult {
 	type: KeyType;
 	customFields: JsonObject;
 	sessionToken: string;
+	sessionTtlSeconds: number;
 }
+
+export const SESSION_TTL_SECONDS = 45;
 
 export class HandshakeService {
 	constructor(
@@ -26,20 +29,32 @@ export class HandshakeService {
 	): Promise<HandshakeResult> {
 		const keyData = await this.keyRepo.findByKeyWithWhitelists(apiKey);
 		if (!keyData || keyData.revoked) {
-			throw new DomainError("Invalid API key", 403);
+			throw new DomainError(
+				"Invalid or revoked API key",
+				403,
+				"LICENSE_INVALID_OR_REVOKED",
+			);
 		}
 
 		if (
 			keyData.whitelistedIps.length > 0 &&
 			!keyData.whitelistedIps.some((entry) => entry.ip === ip)
 		) {
-			throw new DomainError("IP address not whitelisted", 403);
+			throw new DomainError(
+				"IP address not whitelisted",
+				403,
+				"IP_NOT_WHITELISTED",
+			);
 		}
 		if (
 			keyData.whitelistedHwids.length > 0 &&
 			!keyData.whitelistedHwids.some((entry) => entry.hwid === hwid)
 		) {
-			throw new DomainError("HWID not whitelisted", 403);
+			throw new DomainError(
+				"HWID not whitelisted",
+				403,
+				"HWID_NOT_WHITELISTED",
+			);
 		}
 
 		const now = new Date();
@@ -50,13 +65,17 @@ export class HandshakeService {
 			now.getTime() >=
 				activationTime.getTime() + keyData.trialDurationMin * 60_000
 		) {
-			throw new DomainError("Trial has expired", 403);
+			throw new DomainError("Trial has expired", 403, "TRIAL_EXPIRED");
 		}
 		if (
 			keyData.type === "SUBSCRIPTION" &&
 			(!keyData.expiresAt || now >= keyData.expiresAt)
 		) {
-			throw new DomainError("Subscription expired", 403);
+			throw new DomainError(
+				"Subscription expired",
+				403,
+				"SUBSCRIPTION_EXPIRED",
+			);
 		}
 
 		let activeSessionToken: string;
@@ -67,10 +86,14 @@ export class HandshakeService {
 					keyData.id,
 					sessionToken,
 					sessionBinding,
-					45,
+					SESSION_TTL_SECONDS,
 				))
 			) {
-				throw new DomainError("Invalid or expired session token", 403);
+				throw new DomainError(
+					"Invalid or expired session token",
+					403,
+					"SESSION_INVALID_OR_EXPIRED",
+				);
 			}
 			activeSessionToken = sessionToken;
 			isNewSession = false;
@@ -78,11 +101,15 @@ export class HandshakeService {
 			const registration = await this.sessionRepo.registerSession(
 				keyData.id,
 				sessionBinding,
-				45,
+				SESSION_TTL_SECONDS,
 				keyData.limitConcurrent,
 			);
 			if (registration.status === "limit-reached") {
-				throw new DomainError("Maximum concurrent sessions reached", 403);
+				throw new DomainError(
+					"Maximum concurrent sessions reached",
+					403,
+					"CONCURRENT_SESSION_LIMIT",
+				);
 			}
 			activeSessionToken = registration.token;
 			isNewSession = true;
@@ -93,7 +120,7 @@ export class HandshakeService {
 				activeSessionToken,
 				sessionBinding,
 			);
-			throw new DomainError("Usage balance exhausted", 403);
+			throw new DomainError("Usage balance exhausted", 403, "USAGE_EXHAUSTED");
 		}
 
 		try {
@@ -115,7 +142,11 @@ export class HandshakeService {
 							!usage.ipRegistered &&
 							usage.uniqueIps >= keyData.limitIp
 						) {
-							throw new DomainError("IP registration threshold exceeded", 403);
+							throw new DomainError(
+								"IP registration threshold exceeded",
+								403,
+								"IP_REGISTRATION_LIMIT",
+							);
 						}
 						if (
 							keyData.limitHwid > 0 &&
@@ -125,6 +156,7 @@ export class HandshakeService {
 							throw new DomainError(
 								"Hardware registration threshold exceeded",
 								403,
+								"HWID_REGISTRATION_LIMIT",
 							);
 						}
 						await deviceRepo.createMapping(keyData.id, device.id);
@@ -134,7 +166,11 @@ export class HandshakeService {
 						keyData.type === "USAGE" &&
 						!(await deviceRepo.consumeUsage(keyData.id))
 					) {
-						throw new DomainError("Usage balance exhausted", 403);
+						throw new DomainError(
+							"Usage balance exhausted",
+							403,
+							"USAGE_EXHAUSTED",
+						);
 					}
 				},
 			);
@@ -160,6 +196,7 @@ export class HandshakeService {
 			type: keyData.type,
 			customFields: keyData.customFields,
 			sessionToken: activeSessionToken,
+			sessionTtlSeconds: SESSION_TTL_SECONDS,
 		};
 	}
 

@@ -8,9 +8,9 @@ The Keyzori server exposes system, license, and administrative routes. Interacti
 - Administrative routes require `X-Admin-Key`.
 - License routes carry the license secret in the JSON body.
 - Timestamps are serialized as ISO 8601 strings.
-- Validation and domain failures use `{ "error": "message" }`.
-- License and admin routes are rate-limited per client IP. The default is 60 requests per minute.
-- Rate-limit failures return HTTP `429` with `{ "error": "Too Many Requests" }`.
+- Validation and domain failures use `{ "error": "message", "code": "STABLE_CODE" }`.
+- Runtime routes use a 30-request/minute hashed-principal budget plus a coarse 6,000-request/minute IP ceiling. Admin routes retain a 60-request/minute IP budget.
+- Rate-limit failures return HTTP `429`, a `Retry-After` header, and `{ "error": "Too Many Requests", "code": "RATE_LIMITED" }`.
 - System, license, and admin responses include `Cache-Control: no-store`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, and `Referrer-Policy: no-referrer`.
 
 The configured body-size ceiling applies before route validation. The default is 65,536 bytes.
@@ -107,7 +107,8 @@ Response `200`:
   "customFields": {
     "tier": "pro"
   },
-  "sessionToken": "7db7029c-0fe7-42e1-a14b-a14e468b752b"
+  "sessionToken": "7db7029c-0fe7-42e1-a14b-a14e468b752b",
+  "sessionTtlSeconds": 45
 }
 ```
 
@@ -121,7 +122,7 @@ Possible responses:
 | `429` | Client exceeded the configured request budget. |
 | `500` | Unexpected PostgreSQL, Redis, or server failure. |
 
-Common `403` error messages are `Invalid API key`, `IP address not whitelisted`, `HWID not whitelisted`, `Trial has expired`, `Subscription expired`, `Maximum concurrent sessions reached`, `Usage balance exhausted`, `IP registration threshold exceeded`, and `Hardware registration threshold exceeded`.
+Runtime `403` codes are `LICENSE_INVALID_OR_REVOKED`, `IP_NOT_WHITELISTED`, `HWID_NOT_WHITELISTED`, `TRIAL_EXPIRED`, `SUBSCRIPTION_EXPIRED`, `SESSION_INVALID_OR_EXPIRED`, `CONCURRENT_SESSION_LIMIT`, `USAGE_EXHAUSTED`, `IP_REGISTRATION_LIMIT`, and `HWID_REGISTRATION_LIMIT`. Generic errors use `INVALID_REQUEST`, `UNAUTHORIZED`, `NOT_FOUND`, `CONFLICT`, `RATE_LIMITED`, or `INTERNAL_ERROR`.
 
 ### `POST /v1/logout`
 
@@ -158,7 +159,7 @@ X-Admin-Key: your-random-administrator-secret
 Missing or invalid credentials return `401`:
 
 ```json
-{ "error": "Unauthorized" }
+{ "error": "Unauthorized", "code": "UNAUTHORIZED" }
 ```
 
 Restrict these routes at the network layer in production even when header authentication is enabled.
@@ -203,7 +204,7 @@ Response `201`:
 }
 ```
 
-Possible responses: `201`, `400`, `401`, or `500`. Owner email addresses must be unique.
+Possible responses: `201`, `400`, `401`, `409`, or `500`. Duplicate owner email addresses return safe `409 CONFLICT` responses.
 
 ### `GET /admin/users`
 
@@ -217,7 +218,7 @@ Returns one owner by internal ID. Possible responses: `200`, `401`, `404`, or `5
 
 ### `PATCH /admin/users/:id`
 
-Updates an owner's `email`, `name`, `customFields`, or any combination of them. Email normalization and uniqueness rules are the same as creation. Customer custom fields are administrative metadata and are not returned by the license handshake; use license custom fields for client-visible data. Possible responses: `200`, `400`, `401`, `404`, or `500`.
+Updates an owner's `email`, `name`, `customFields`, or any combination of them. Email normalization and uniqueness rules are the same as creation. Customer custom fields are administrative metadata and are not returned by the license handshake; use license custom fields for client-visible data. Possible responses: `200`, `400`, `401`, `404`, `409`, or `500`.
 
 ### `DELETE /admin/users/:id`
 
@@ -252,11 +253,11 @@ Request:
 | --- | --- | --- | --- |
 | `userId` | Yes | — | String, 1–64 characters; must identify an existing user. |
 | `type` | Yes | — | `PERPETUAL`, `SUBSCRIPTION`, or `USAGE`. |
-| `limitIp` | No | `0` | Non-negative integer; `0` is unlimited. |
-| `limitHwid` | No | `0` | Non-negative integer; `0` is unlimited. |
-| `limitConcurrent` | No | `0` | Non-negative integer; `0` is unlimited. |
-| `limitUsage` | No | `0` | Positive for `USAGE`; otherwise normally `0`. |
-| `trialDurationMin` | No | `0` | Non-negative integer; starts on first successful handshake. |
+| `limitIp` | No | `0` | Integer `0`–`2147483647`; `0` is unlimited. |
+| `limitHwid` | No | `0` | Integer `0`–`2147483647`; `0` is unlimited. |
+| `limitConcurrent` | No | `0` | Integer `0`–`2147483647`; `0` is unlimited. |
+| `limitUsage` | No | `0` | Integer `0`–`2147483647`; positive for `USAGE`. |
+| `trialDurationMin` | No | `0` | Integer `0`–`2147483647`; starts on first successful handshake. |
 | `customFields` | No | `{}` | JSON object returned by successful handshakes. Values may contain JSON strings, numbers, booleans, `null`, arrays, or nested objects. |
 | `expiresAt` | Conditional | `null` | Future ISO timestamp required only for `SUBSCRIPTION`. |
 

@@ -22,6 +22,7 @@ import { LicenseClient } from "keyzori";
 const client = new LicenseClient({
 	apiKey: process.env.KEYZORI_LICENSE_KEY ?? "",
 	serverUrl: "https://licenses.example.com",
+	hardwareId: process.env.APP_MACHINE_ID,
 	heartbeatIntervalMs: 30_000,
 	maxRetries: 2,
 	requestTimeoutMs: 10_000,
@@ -38,6 +39,10 @@ client.events.on("license:expired", (reason) => {
 
 client.events.on("license:revoked", (reason) => {
 	console.error("License rejected", reason);
+});
+
+client.events.on("license:rejected", (reason) => {
+	console.error("License policy rejected", reason);
 });
 
 client.events.on("network:offline", (reason) => {
@@ -62,7 +67,7 @@ Attach event listeners before `initialize()` so the initial `ready` event cannot
 The package exports:
 
 - `LicenseClient` — the public runtime API.
-- `LicenseClientConfig`, `LicenseEvents`, `LicenseEventMap`, `KeyType`, `LogLevel`, `JsonObject`, `JsonValue`, and `JsonPrimitive` TypeScript types.
+- `LicenseClientConfig`, `LicenseEvents`, `LicenseEventMap`, `LicenseErrorCode`, `KeyType`, `LogLevel`, `JsonObject`, `JsonValue`, and `JsonPrimitive` TypeScript types.
 
 Hardware identification, networking, response-size limits, and event dispatch are internal implementation details and are not public package exports.
 
@@ -72,7 +77,8 @@ Hardware identification, networking, response-size limits, and event dispatch ar
 | --- | --- | --- | --- | --- |
 | `apiKey` | `string` | Yes | — | Full license secret. Blank strings are rejected. |
 | `serverUrl` | `string` | Yes | — | HTTPS base URL; HTTP is restricted to `localhost`, `127.0.0.1`, or `[::1]`. |
-| `heartbeatIntervalMs` | `number` | No | `30000` | Delay after a completed heartbeat before the next request. Positive integer. |
+| `hardwareId` | `string` | No | Automatic legacy ID | Application-specific identifier containing 1–1024 trimmed characters. Only its SHA-256 digest is transmitted. |
+| `heartbeatIntervalMs` | `number` | No | `30000` | Requested maximum delay after a completed heartbeat. It is clamped to two-thirds of the server-advertised session TTL. |
 | `maxRetries` | `number` | No | `2` | Consecutive retryable heartbeat failures before `network:offline`. Positive integer. |
 | `requestTimeoutMs` | `number` | No | `10000` | Timeout applied to handshake and logout requests. Positive integer. |
 | `logLevel` | `LogLevel` | No | `none` | Internal informational logging threshold. |
@@ -121,11 +127,11 @@ import type { JsonObject } from "keyzori";
 const fields: JsonObject = await client.initialize();
 ```
 
-An unsuccessful initial handshake rejects with an `Error`, logs according to `logLevel`, and destroys the client. A failed/destroyed instance cannot be reinitialized; create a new `LicenseClient` if retry policy requires a fresh session.
+An unsuccessful initial handshake rejects with an `Error`, emits the matching policy event when identifiable, logs according to `logLevel`, and destroys the client. A failed/destroyed instance cannot be reinitialized; create a new `LicenseClient` if retry policy requires a fresh session.
 
 Typical initial error messages include:
 
-- `License Block: Invalid API key`
+- `License Block: Invalid or revoked API key`
 - `License Block: Subscription expired`
 - `License Block: Maximum concurrent sessions reached`
 - `License server returned an invalid handshake response`
@@ -148,11 +154,14 @@ If logout fails, destruction still completes. With `logLevel` at `warn` or above
 | `ready` | `(customFields)` | Exactly once after initial validation succeeds. |
 | `heartbeat:success` | `()` | A recurring handshake succeeds and its response is valid. |
 | `heartbeat:failed` | `(error, strikes)` | A retryable heartbeat fails. It also fires on the final strike. |
-| `license:expired` | `(reason)` | A heartbeat returns `403` with a reason containing `expired`. |
-| `license:revoked` | `(reason)` | A heartbeat returns any other `403`, including revocation and policy rejection. |
+| `heartbeat:throttled` | `(retryAfterMs)` | A `429` delays the next heartbeat according to `Retry-After` without consuming a failure strike. |
+| `license:expired` | `(reason)` | A trial or subscription expiry code is returned. |
+| `license:revoked` | `(reason)` | The license is invalid or revoked. |
+| `session:expired` | `(reason)` | The server-issued session is invalid or expired. |
+| `license:rejected` | `(reason)` | Another whitelist, concurrency, usage, IP, or HWID policy rejects the runtime. |
 | `network:offline` | `(error)` | Consecutive retryable failures reach `maxRetries`. |
 
-After `license:expired`, `license:revoked`, or `network:offline`, the client destroys itself. Event handlers should disable licensed functionality or close the application according to product policy.
+After a fatal license event or `network:offline`, the client destroys itself. New servers provide stable error codes; the SDK retains message-based classification for older servers.
 
 Successful heartbeats reset the consecutive-failure count to zero. Heartbeats are scheduled only after the previous request finishes, so a slow request cannot overlap the next one.
 
@@ -182,6 +191,8 @@ client.events.removeListener("heartbeat:success", onHeartbeat);
 
 - Treat the full license key as a credential. Do not log or embed it in public source.
 - Use HTTPS outside loopback development; the SDK rejects remote cleartext URLs.
+- Handshake and logout requests use Fetch redirect mode `error`, so 307/308 responses cannot forward the license secret or body to another origin.
 - The SDK performs policy enforcement in application code; determined users controlling the host may modify that application. Combine licensing with server-side authorization for high-value operations.
 - License `customFields` are visible to every application holding the license secret and must not contain secrets. Customer custom fields remain administrative-only.
 - Ensure application shutdown awaits `destroy()` when possible, while still relying on the 45-second server TTL after crashes.
+- Bun standalone executables are release-tested with `bun build --compile`; the compiled fixture imports the built `keyzori` package export and exercises initialization, heartbeat, token reuse, logout, and redirect refusal.

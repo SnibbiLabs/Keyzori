@@ -53,7 +53,7 @@ The root build context supplies centralized workspace dependencies, but the resu
 - The browser receives only an opaque, random, `HttpOnly`, `SameSite=Strict` session cookie. Sessions are stored in memory and expire after a fixed lifetime, so a restart signs everyone out.
 - Login comparison and server admin-key comparison use constant-time digest checks. Five failed logins from one TCP peer cause a 15-minute lockout.
 - Mutating requests require an exact same-origin `Origin`; cross-site requests are rejected before proxying.
-- The upstream admin key remains server-side. The proxy exposes only an allowlisted set of customer and license endpoints, rejects redirects and non-JSON responses, and applies response-size and timeout limits.
+- The upstream admin key remains server-side. The proxy exposes only an allowlisted set of customer and license endpoints, rejects redirects and non-JSON responses, and applies response-size and timeout limits. Responses are streamed through a 2 MiB reader and cancelled immediately when that ceiling is crossed.
 - CSP, frame denial, no-sniff, no-referrer, permissions policy, no-store, and HSTS headers are applied centrally.
 - Keep the dashboard behind TLS, restrict network access where possible, and never reuse `KEYZORI_AUTH_PASS` as `KEYZORI_ADMIN_KEY`.
 

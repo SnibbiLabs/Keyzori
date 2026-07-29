@@ -27,7 +27,7 @@ sequenceDiagram
         opt New USAGE session
             Service->>DB: Atomically consume one usage unit
         end
-        Service-->>API: Type, custom fields, and session token
+        Service-->>API: Type, custom fields, session token, and 45-second TTL
         API-->>SDK: 200 success
     end
 ```
@@ -38,4 +38,6 @@ Validation stops at the first failure and returns a structured `403` error. Exis
 
 If a newly admitted session later fails device validation, trial activation, or usage charging, Keyzori removes that Redis session before returning the error.
 
-The official SDK waits 30 seconds by default after each completed heartbeat. Successful heartbeats reset retry strikes. At two consecutive retryable failures by default, it emits `network:offline` and destroys itself. Calling `destroy()` sends `/v1/logout`, releasing the slot without waiting for TTL expiry.
+The official SDK treats `heartbeatIntervalMs` as a requested maximum and clamps it to two-thirds of the advertised session TTL (30 seconds for the server's 45-second TTL). Successful heartbeats reset retry strikes. HTTP `429` responses use `Retry-After`, emit `heartbeat:throttled`, and do not consume strikes. At two consecutive retryable failures by default, the SDK emits `network:offline` and destroys itself. Calling `destroy()` sends a redirect-refusing, best-effort `/v1/logout`, releasing the slot without waiting for TTL expiry.
+
+Every error response includes a stable `code`. Updated SDKs classify expiry, revocation, session expiry, and other policy rejections by code while retaining message-based compatibility with older servers.

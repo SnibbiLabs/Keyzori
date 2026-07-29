@@ -55,6 +55,7 @@
 		"test:server": "bun run --cwd apps/server test",
 		"test:cli": "bun test apps/server/src/test/cli.test.ts",
 		"test:sdk": "bun run --cwd apps/sdk test",
+		"test:sdk:compiled": "bun run build:sdk && SDK_COMPILED_TEST_ENABLED=true bun test tests/sdkCompiledBinary.test.ts",
 		"test:dash": "bun run --cwd apps/dash test",
 		"test:flow": "bun test tests/productFlow.test.ts",
 		"test:live": "bun run build:server && bun run --cwd apps/server ../../tests/liveFlow.ts",

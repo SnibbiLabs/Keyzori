@@ -1,7 +1,12 @@
 import { timingSafeEqual } from "node:crypto";
 import Elysia, { type Context, t } from "elysia";
 import type { AdminService } from "../application/services/AdminService";
+import type { ClientIpResolver } from "./clientIp";
 import { DomainError } from "../domain/errors";
+import {
+	enforceRateLimit,
+	type RedisSlidingWindowRateLimiter,
+} from "../plugins/ratelimit";
 import {
 	AdminCreateKeyInputSchema,
 	AdminCreateUserInputSchema,
@@ -35,24 +40,41 @@ export const createAdminAuthMiddleware =
 		});
 		if (!adminKey || !authenticated) {
 			set.status = 401;
-			return { error: "Unauthorized" };
+			return { error: "Unauthorized", code: "UNAUTHORIZED" as const };
 		}
 	};
+
+export interface AdminRateLimitOptions {
+	limiter: RedisSlidingWindowRateLimiter;
+	clientIpResolver: ClientIpResolver;
+	requestsPerMinute: number;
+}
 
 export const adminPlugin = (
 	adminService: AdminService,
 	adminApiKeys?: readonly string[],
+	rateLimitOptions?: AdminRateLimitOptions,
 ) =>
 	new Elysia({ prefix: "/admin", tags: ["Admin"] })
 		.onError(({ code, error, set }) => {
 			if (error instanceof DomainError) {
 				set.status = error.statusCode;
-				return { error: error.message };
+				return { error: error.message, code: error.code };
 			}
 			if (code === "VALIDATION") {
 				set.status = 400;
-				return { error: error.message };
+				return { error: error.message, code: "INVALID_REQUEST" as const };
 			}
+		})
+		.onBeforeHandle(async ({ request, server, set }) => {
+			if (!rateLimitOptions) return;
+			const ip = rateLimitOptions.clientIpResolver.resolve(request, server);
+			return await enforceRateLimit(
+				rateLimitOptions.limiter,
+				`ratelimit:admin:${ip}`,
+				rateLimitOptions.requestsPerMinute,
+				set,
+			);
 		})
 		.onBeforeHandle(createAdminAuthMiddleware(adminApiKeys))
 		.post(
@@ -71,6 +93,7 @@ export const adminPlugin = (
 					201: UserResponseSchema,
 					400: ErrorResponseSchema,
 					401: ErrorResponseSchema,
+					409: ErrorResponseSchema,
 					429: ErrorResponseSchema,
 					500: ErrorResponseSchema,
 				},
@@ -126,6 +149,7 @@ export const adminPlugin = (
 					400: ErrorResponseSchema,
 					401: ErrorResponseSchema,
 					404: ErrorResponseSchema,
+					409: ErrorResponseSchema,
 					429: ErrorResponseSchema,
 					500: ErrorResponseSchema,
 				},

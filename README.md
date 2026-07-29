@@ -104,12 +104,13 @@ import { LicenseClient } from "keyzori";
 const license = new LicenseClient({
  apiKey: process.env.KEYZORI_LICENSE_KEY ?? "",
  serverUrl: "https://licenses.example.com",
+ hardwareId: process.env.APP_MACHINE_ID,
 });
 
 const customFields = await license.initialize();
 ```
 
-The returned object contains client-visible custom fields configured on that license. Customer custom fields are administrative metadata and are not sent to the SDK.
+The optional application-specific `hardwareId` is trimmed, hashed with SHA-256, and never sent raw. Omitting it preserves the legacy automatic identifier. The returned object contains client-visible custom fields configured on that license. Customer custom fields are administrative metadata and are not sent to the SDK.
 
 Continue with the [complete product flow](docs/product-flow.md) for heartbeats, logout, and revocation.
 

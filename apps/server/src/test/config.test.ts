@@ -5,6 +5,7 @@ const validEnvironment = {
 	DATABASE_URL: "postgresql://localhost/keyzori",
 	REDIS_URL: "redis://localhost:6379",
 	ADMIN_API_KEY: "a-secure-production-key-that-is-long-enough",
+	TRUSTED_PROXY_HEADER: "x-forwarded-for",
 };
 
 describe("loadServerConfig", () => {
@@ -13,14 +14,23 @@ describe("loadServerConfig", () => {
 			host: "0.0.0.0",
 			port: 3000,
 			trustProxyHeaders: false,
+			trustedProxyHeader: "x-forwarded-for",
 			openapiEnabled: true,
 			rateLimitPerMinute: 60,
+			licenseRateLimitPerMinute: 30,
+			rateLimitPerIpPerMinute: 6_000,
 			maxRequestBodyBytes: 65_536,
 			trustedProxyCidrs: [],
 		});
 	});
 
 	test("requires valid immediate proxy networks when headers are trusted", () => {
+		expect(
+			loadServerConfig({
+				...validEnvironment,
+				TRUSTED_PROXY_HEADER: "cf-connecting-ip",
+			}).trustedProxyHeader,
+		).toBe("cf-connecting-ip");
 		expect(() =>
 			loadServerConfig({
 				...validEnvironment,
@@ -41,6 +51,12 @@ describe("loadServerConfig", () => {
 				TRUSTED_PROXY_CIDRS: "not-a-network",
 			}),
 		).toThrow("IPv4 or IPv6 CIDR");
+		expect(() =>
+			loadServerConfig({
+				...validEnvironment,
+				TRUSTED_PROXY_HEADER: "forwarded",
+			}),
+		).toThrow("TRUSTED_PROXY_HEADER must be either");
 	});
 
 	test("rejects short and placeholder admin secrets", () => {

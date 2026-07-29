@@ -296,6 +296,8 @@ describe("admin delivery -> server -> SDK product flow", () => {
 			apiKey: key.key,
 			serverUrl: "https://keyzori.test",
 		});
-		expect(rejectedSdk.initialize()).rejects.toThrow("Invalid API key");
+		expect(rejectedSdk.initialize()).rejects.toThrow(
+			"Invalid or revoked API key",
+		);
 	});
 });

@@ -274,6 +274,48 @@ describe("DrizzleUserRepository", () => {
 		);
 	});
 
+	test("translates duplicate email SQLSTATE failures into safe conflicts", async () => {
+		const duplicate = {
+			code: "23505",
+			constraint: "User_email_key",
+			detail: "sensitive database detail",
+		};
+		const query = {
+			values() {
+				return this;
+			},
+			set() {
+				return this;
+			},
+			where() {
+				return this;
+			},
+			async returning() {
+				throw duplicate;
+			},
+		};
+		const repository = new DrizzleUserRepository({
+			insert: () => query,
+			update: () => query,
+		} as unknown as Database);
+		for (const operation of [
+			() => repository.create("duplicate@example.com", "Owner", {}),
+			() => repository.update("user-1", { email: "duplicate@example.com" }),
+		]) {
+			try {
+				await operation();
+				throw new Error("Expected duplicate email conflict");
+			} catch (error) {
+				expect(error).toMatchObject({
+					statusCode: 409,
+					code: "CONFLICT",
+					message: "A user with this email already exists",
+				});
+				expect(String(error)).not.toContain("sensitive database detail");
+			}
+		}
+	});
+
 	test("finds users by id and returns null when absent", async () => {
 		const repository = new DrizzleUserRepository(
 			asDatabase(new FakeDatabase([[userFixture], []])),

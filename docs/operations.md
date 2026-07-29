@@ -14,7 +14,7 @@ Use this guide to back up, upgrade, monitor, and recover a running Keyzori insta
 
 Deploy one revision, allow startup migrations to complete, then require `/ready` to return HTTP 200 before shifting traffic. Keep the previous image digest and database backup until the observation window closes.
 
-Monitor HTTP 5xx and 429 rates, readiness failures, process restarts, PostgreSQL connections/latency/storage, Redis memory/latency/evictions, and failed administrative operations. Logs and traces must redact request bodies, license secrets, admin credentials, database URLs, HWIDs, and raw client IPs unless the operator has an explicit privacy policy for them.
+Monitor HTTP 5xx and 429 rates by budget (admin IP, license principal, and coarse IP), readiness failures, process restarts, PostgreSQL connections/latency/storage, Redis memory/latency/evictions, and failed administrative operations. Logs and traces must redact request bodies, license secrets, admin credentials, database URLs, HWIDs, and raw client IPs unless the operator has an explicit privacy policy for them. Redis rate-limit keys contain only SHA-256 derivatives of credentials.
 
 ## Rollback
 
@@ -22,7 +22,7 @@ Monitor HTTP 5xx and 429 rates, readiness failures, process restarts, PostgreSQL
 - If a backward-compatible migration ran, redeploy only when the previous application version is documented as compatible.
 - If a destructive or incompatible migration ran, stop writes, restore the pre-deployment backup to a new database, point the previous image at it, verify `/ready`, and then restore traffic.
 
-Never edit an already-applied migration. Create a new corrective migration or restore a backup.
+Never edit an already-applied migration. Create a new corrective migration or restore a backup. The non-negative license-limit migration intentionally fails if manually inserted negative legacy data exists; repair it explicitly instead of rewriting values during rollout.
 
 ## Recovery exercises
 

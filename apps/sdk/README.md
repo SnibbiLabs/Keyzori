@@ -31,6 +31,7 @@ import { LicenseClient } from "keyzori";
 const client = new LicenseClient({
 	apiKey: process.env.KEYZORI_LICENSE_KEY ?? "",
 	serverUrl: "https://licenses.example.com",
+	hardwareId: process.env.APP_MACHINE_ID,
 	heartbeatIntervalMs: 30_000,
 	maxRetries: 3,
 	requestTimeoutMs: 10_000,
@@ -85,21 +86,25 @@ Remote server URLs must use HTTPS; loopback HTTP remains available for local dev
 | `ready` | Initial validation succeeded; receives custom fields |
 | `heartbeat:success` | The session TTL was refreshed |
 | `heartbeat:failed` | A retryable HTTP or network failure occurred |
+| `heartbeat:throttled` | A `429` delayed the next heartbeat without adding a failure strike |
 | `license:revoked` | The server rejected the license |
 | `license:expired` | A trial or subscription expired |
+| `session:expired` | The server-issued session is no longer valid |
+| `license:rejected` | Another license policy rejected the runtime |
 | `network:offline` | Consecutive failures reached `maxRetries` |
 
 > [!WARNING]
-> The SHA-256 hardware identifier is derived from host OS and network-adapter properties. Significant hardware or network changes can register a new device.
+> Without `hardwareId`, the legacy SHA-256 identifier is derived from host OS and network-adapter properties. Significant hardware or network changes can register a new device. Applications can instead provide a stable, application-specific identifier; only its SHA-256 digest is transmitted.
 
 ## Build, test, and publish
 
 ```powershell
 bun run --cwd apps/sdk build
 bun run --cwd apps/sdk test
+bun run test:sdk:compiled
 bun run publish:sdk
 ```
 
-The published package contains compiled ESM JavaScript and TypeScript declarations from `dist/`; source and tests are not shipped.
+The published package contains compiled ESM JavaScript and TypeScript declarations from `dist/`; source and tests are not shipped. CI also compiles and runs a downstream Bun standalone executable against local test servers.
 
 See the [complete SDK reference](../../docs/sdk-reference.md) for every export, configuration default, method, event, lifecycle guarantee, and error behavior.

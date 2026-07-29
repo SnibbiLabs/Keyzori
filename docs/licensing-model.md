@@ -37,7 +37,7 @@ The official SDK derives a 64-character hexadecimal SHA-256 HWID from platform, 
 
 `limitConcurrent` controls active server-issued session tokens. `0` is unlimited. A positive value is enforced atomically in Redis, including stale-session cleanup, client-context verification, and TTL refresh.
 
-The server stores each accepted session for 45 seconds. The SDK heartbeats every 30 seconds by default, leaving a 15-second normal safety margin. Calling `destroy()` logs out immediately. A process that crashes releases its slot after the last TTL expires.
+The server stores each accepted session for 45 seconds and advertises that value as `sessionTtlSeconds`. The SDK treats its configured heartbeat interval as a maximum and clamps it to two-thirds of the advertised TTL, leaving a safety margin even when an application requests an unsafe interval. Calling `destroy()` logs out immediately. A process that crashes releases its slot after the last TTL expires.
 
 Tokens are unguessable opaque values bound server-side to the admission IP/HWID context. The official SDK keeps one token inside each `LicenseClient` instance and never accepts a caller-selected session identity.
 

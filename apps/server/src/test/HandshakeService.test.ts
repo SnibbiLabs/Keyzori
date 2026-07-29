@@ -347,6 +347,7 @@ describe("HandshakeService", () => {
 			type: "PERPETUAL",
 			customFields: { tier: "premium" },
 			sessionToken: "11111111-1111-4111-8111-111111111111",
+			sessionTtlSeconds: 45,
 		});
 		expect(harness.update).toHaveBeenCalledTimes(1);
 	});

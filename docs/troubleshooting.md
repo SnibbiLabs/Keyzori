@@ -88,13 +88,17 @@ The license has already registered its configured number of distinct values. Net
 
 Consecutive retryable heartbeat failures reached `maxRetries`. Check server readiness, network path, TLS, rate limits, and `requestTimeoutMs`. A new `LicenseClient` is required after fatal destruction.
 
-### Repeated `license:revoked` for another policy failure
+### `heartbeat:throttled`
 
-The SDK uses `license:expired` only when a `403` reason contains `expired`; every other heartbeat `403` emits `license:revoked`. Inspect the listener's `reason` argument for the precise server message.
+The server returned `429`. The SDK honors `Retry-After`, reschedules, and does not add a failure strike. Check `LICENSE_RATE_LIMIT_PER_MINUTE`, the coarse IP ceiling, and whether an application is creating unnecessary clients.
+
+### Runtime policy event selection
+
+Updated servers return stable error codes. Invalid/revoked keys emit `license:revoked`; trial/subscription expiry emits `license:expired`; an invalid session emits `session:expired`; other whitelist, concurrency, usage, IP, or HWID failures emit `license:rejected`. The SDK keeps legacy message classification for older servers.
 
 ### HWID changes unexpectedly
 
-The SDK's HWID reflects OS, architecture, logical CPU count, MAC addresses, and sometimes hostname. Containers, VM cloning, adapter replacement, privacy MAC rotation, and host changes can produce a new value.
+Without an explicit `hardwareId`, the SDK's legacy HWID reflects OS, architecture, logical CPU count, MAC addresses, and sometimes hostname. Containers, VM cloning, adapter replacement, privacy MAC rotation, and host changes can produce a new value. Supply a stable application-specific `hardwareId` when the host signal is unsuitable; only its SHA-256 digest is sent.
 
 ## Migration and data issues
 
@@ -102,6 +106,7 @@ The SDK's HWID reflects OS, architecture, logical CPU count, MAC addresses, and 
 - Back up PostgreSQL before applying new migrations.
 - Do not use `db:push` against production.
 - License secrets have a non-null SHA-256 `keyHash` and display `keyPrefix`; no plaintext key column remains.
+- The non-negative limit migration deliberately stops when negative legacy values exist. Repair those rows explicitly before rerunning it; the migration never silently clamps them.
 
 If a migration fails, stop the rollout and restore or repair according to a reviewed database plan. Do not edit migration history after it has been applied to shared environments.
 

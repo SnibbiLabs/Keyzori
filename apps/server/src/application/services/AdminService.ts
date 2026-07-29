@@ -2,6 +2,7 @@ import { DomainError, NotFoundError } from "../../domain/errors";
 import type { ApiKey, JsonObject, KeyType, User } from "../../domain/entities";
 import type { IKeyRepository } from "../../domain/repositories/IKeyRepository";
 import type { IUserRepository } from "../../domain/repositories/IUserRepository";
+import { MAX_LICENSE_LIMIT } from "../../domain/licenseLimits";
 
 export interface CreateKeyInput {
 	userId: string;
@@ -97,8 +98,15 @@ export class AdminService {
 			data.limitUsage,
 			data.trialDurationMin,
 		].filter((value): value is number => value !== undefined);
-		if (limits.some((value) => !Number.isInteger(value) || value < 0)) {
-			throw new DomainError("License limits must be non-negative integers");
+		if (
+			limits.some(
+				(value) =>
+					!Number.isInteger(value) || value < 0 || value > MAX_LICENSE_LIMIT,
+			)
+		) {
+			throw new DomainError(
+				`License limits must be non-negative integers no greater than ${MAX_LICENSE_LIMIT}`,
+			);
 		}
 		if (!(await this.userRepo.findById(data.userId))) {
 			throw new NotFoundError("User");
@@ -159,8 +167,15 @@ export class AdminService {
 			data.limitUsage,
 			data.trialDurationMin,
 		].filter((value): value is number => value !== undefined);
-		if (limits.some((value) => !Number.isInteger(value) || value < 0)) {
-			throw new DomainError("License limits must be non-negative integers");
+		if (
+			limits.some(
+				(value) =>
+					!Number.isInteger(value) || value < 0 || value > MAX_LICENSE_LIMIT,
+			)
+		) {
+			throw new DomainError(
+				`License limits must be non-negative integers no greater than ${MAX_LICENSE_LIMIT}`,
+			);
 		}
 
 		const userId = data.userId ?? current.userId;

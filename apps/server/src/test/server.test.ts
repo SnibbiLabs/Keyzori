@@ -20,7 +20,9 @@ const mockRedis = {
 	scard: mock(async () => 1),
 	del: mock(async () => {}),
 	ping: mock(async () => "PONG"),
-	send: mock(async () => (rateLimitCount >= 60 ? 0 : 1)),
+	send: mock(async (_command: string, args: string[]) =>
+		rateLimitCount >= Number(args[6]) ? [0, 1] : [1, 0],
+	),
 };
 
 import { createServer } from "../index";
@@ -119,9 +121,12 @@ describe("Keyzori Server Comprehensive Operations", () => {
 			"HOST",
 			"PORT",
 			"TRUST_PROXY_HEADERS",
+			"TRUSTED_PROXY_HEADER",
 			"TRUSTED_PROXY_CIDRS",
 			"OPENAPI_ENABLED",
 			"RATE_LIMIT_PER_MINUTE",
+			"LICENSE_RATE_LIMIT_PER_MINUTE",
+			"RATE_LIMIT_PER_IP_PER_MINUTE",
 			"MAX_REQUEST_BODY_BYTES",
 			"DRIZZLE_MIGRATIONS_PATH",
 		]) {
@@ -131,6 +136,9 @@ describe("Keyzori Server Comprehensive Operations", () => {
 		expect(document.info.description).toContain("Complete license examples");
 		expect(document.paths["/v1/handshake"]).toBeDefined();
 		expect(document.paths["/admin/keys"]).toBeDefined();
+		expect(
+			document.paths["/admin/users"]?.post?.responses?.["409"],
+		).toBeDefined();
 		expect(document.components.securitySchemes.AdminKey).toBeDefined();
 
 		const handshake = document.paths["/v1/handshake"]?.post;
@@ -188,7 +196,11 @@ describe("Keyzori Server Comprehensive Operations", () => {
 			}),
 		);
 		expect(res.status).toBe(429);
-		expect(await res.json()).toEqual({ error: "Too Many Requests" });
+		expect(await res.json()).toEqual({
+			error: "Too Many Requests",
+			code: "RATE_LIMITED",
+		});
+		expect(res.headers.get("retry-after")).toBe("1");
 	});
 
 	it("returns a safe JSON response for unexpected failures", async () => {
@@ -206,7 +218,10 @@ describe("Keyzori Server Comprehensive Operations", () => {
 		);
 
 		expect(response.status).toBe(500);
-		expect(await response.json()).toEqual({ error: "Internal Server Error" });
+		expect(await response.json()).toEqual({
+			error: "Internal Server Error",
+			code: "INTERNAL_ERROR",
+		});
 	});
 
 	it("maps uncaught domain errors at the server boundary", async () => {
@@ -219,7 +234,10 @@ describe("Keyzori Server Comprehensive Operations", () => {
 			new Request("http://localhost:3000/__test_domain_error"),
 		);
 		expect(response.status).toBe(409);
-		expect(await response.json()).toEqual({ error: "Safe domain failure" });
+		expect(await response.json()).toEqual({
+			error: "Safe domain failure",
+			code: "INVALID_REQUEST",
+		});
 	});
 
 	it("Blocks unauthorized admin access", async () => {
