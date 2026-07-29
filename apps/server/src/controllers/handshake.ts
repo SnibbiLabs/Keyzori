@@ -1,8 +1,13 @@
+import { createHash } from "node:crypto";
 import Elysia from "elysia";
 import type { HandshakeService } from "../application/services/HandshakeService";
 import type { ClientIpOptions } from "./clientIp";
 import { DomainError } from "../domain/errors";
-import { getClientIp } from "./clientIp";
+import { ClientIpResolver } from "./clientIp";
+import {
+	enforceRateLimit,
+	type RedisSlidingWindowRateLimiter,
+} from "../plugins/ratelimit";
 import {
 	ErrorResponseSchema,
 	HandshakeInputSchema,
@@ -11,33 +16,70 @@ import {
 	SuccessResponseSchema,
 } from "./validation";
 
+export interface LicenseRateLimitOptions {
+	limiter: RedisSlidingWindowRateLimiter;
+	requestsPerMinute: number;
+}
+
+function hashPrincipal(...parts: string[]): string {
+	return createHash("sha256").update(parts.join("\0")).digest("hex");
+}
+
 export const handshakePlugin = (
 	handshakeService: HandshakeService,
 	clientIpOptions: ClientIpOptions = {
 		trustProxyHeaders: false,
 		trustedProxyCidrs: [],
 	},
-) =>
-	new Elysia({ tags: ["License"] })
+	rateLimitOptions?: LicenseRateLimitOptions,
+) => {
+	const clientIpResolver = new ClientIpResolver(clientIpOptions);
+	const limitPrincipal = async (
+		apiKey: string,
+		hwid: string,
+		sessionToken: string | undefined,
+		set: Parameters<typeof enforceRateLimit>[3],
+	) => {
+		if (!rateLimitOptions) return;
+		const principal = sessionToken
+			? hashPrincipal(sessionToken)
+			: hashPrincipal(apiKey, hwid);
+		return await enforceRateLimit(
+			rateLimitOptions.limiter,
+			`ratelimit:license:${principal}`,
+			rateLimitOptions.requestsPerMinute,
+			set,
+		);
+	};
+
+	return new Elysia({ tags: ["License"] })
 		.onError(({ code, error, set }) => {
 			if (error instanceof DomainError) {
 				set.status = error.statusCode;
-				return { error: error.message };
+				return { error: error.message, code: error.code };
 			}
 			if (code === "VALIDATION") {
 				set.status = 400;
-				return { error: error.message };
+				return { error: error.message, code: "INVALID_REQUEST" as const };
 			}
 		})
 		.post(
 			"/v1/handshake",
-			async ({ body, request, server }) =>
-				await handshakeService.processHandshake(
+			async ({ body, request, server, set }) => {
+				const limited = await limitPrincipal(
 					body.apiKey,
 					body.hwid,
 					body.sessionToken,
-					getClientIp(request, server, clientIpOptions),
-				),
+					set,
+				);
+				if (limited) return limited;
+				return await handshakeService.processHandshake(
+					body.apiKey,
+					body.hwid,
+					body.sessionToken,
+					clientIpResolver.resolve(request, server),
+				);
+			},
 			{
 				body: HandshakeInputSchema,
 				response: {
@@ -57,13 +99,21 @@ export const handshakePlugin = (
 		)
 		.post(
 			"/v1/logout",
-			async ({ body, request, server }) =>
-				await handshakeService.logout(
+			async ({ body, request, server, set }) => {
+				const limited = await limitPrincipal(
+					body.apiKey,
+					body.hwid,
+					body.sessionToken,
+					set,
+				);
+				if (limited) return limited;
+				return await handshakeService.logout(
 					body.apiKey,
 					body.sessionToken,
 					body.hwid,
-					getClientIp(request, server, clientIpOptions),
-				),
+					clientIpResolver.resolve(request, server),
+				);
+			},
 			{
 				body: LogoutInputSchema,
 				response: {
@@ -80,3 +130,4 @@ export const handshakePlugin = (
 				},
 			},
 		);
+};

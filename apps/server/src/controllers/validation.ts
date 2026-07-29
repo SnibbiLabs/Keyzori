@@ -1,4 +1,5 @@
 import { t } from "elysia";
+import { MAX_LICENSE_LIMIT } from "../domain/licenseLimits";
 
 export const KeyTypeSchema = t.Enum(
 	{
@@ -76,6 +77,7 @@ export const AdminCreateKeyInputSchema = t.Object(
 		limitIp: t.Optional(
 			t.Integer({
 				minimum: 0,
+				maximum: MAX_LICENSE_LIMIT,
 				default: 0,
 				examples: [0, 1, 5],
 				description:
@@ -85,6 +87,7 @@ export const AdminCreateKeyInputSchema = t.Object(
 		limitHwid: t.Optional(
 			t.Integer({
 				minimum: 0,
+				maximum: MAX_LICENSE_LIMIT,
 				default: 0,
 				examples: [0, 1, 3],
 				description:
@@ -94,6 +97,7 @@ export const AdminCreateKeyInputSchema = t.Object(
 		limitConcurrent: t.Optional(
 			t.Integer({
 				minimum: 0,
+				maximum: MAX_LICENSE_LIMIT,
 				default: 0,
 				examples: [0, 1, 5],
 				description:
@@ -103,6 +107,7 @@ export const AdminCreateKeyInputSchema = t.Object(
 		limitUsage: t.Optional(
 			t.Integer({
 				minimum: 0,
+				maximum: MAX_LICENSE_LIMIT,
 				default: 0,
 				examples: [0, 10, 100],
 				description:
@@ -112,6 +117,7 @@ export const AdminCreateKeyInputSchema = t.Object(
 		trialDurationMin: t.Optional(
 			t.Integer({
 				minimum: 0,
+				maximum: MAX_LICENSE_LIMIT,
 				default: 0,
 				examples: [0, 60, 10080],
 				description:
@@ -164,11 +170,19 @@ export const AdminUpdateKeyInputSchema = t.Object(
 	{
 		userId: t.Optional(t.String({ minLength: 1, maxLength: 64 })),
 		type: t.Optional(KeyTypeSchema),
-		limitIp: t.Optional(t.Integer({ minimum: 0 })),
-		limitHwid: t.Optional(t.Integer({ minimum: 0 })),
-		limitConcurrent: t.Optional(t.Integer({ minimum: 0 })),
-		limitUsage: t.Optional(t.Integer({ minimum: 0 })),
-		trialDurationMin: t.Optional(t.Integer({ minimum: 0 })),
+		limitIp: t.Optional(t.Integer({ minimum: 0, maximum: MAX_LICENSE_LIMIT })),
+		limitHwid: t.Optional(
+			t.Integer({ minimum: 0, maximum: MAX_LICENSE_LIMIT }),
+		),
+		limitConcurrent: t.Optional(
+			t.Integer({ minimum: 0, maximum: MAX_LICENSE_LIMIT }),
+		),
+		limitUsage: t.Optional(
+			t.Integer({ minimum: 0, maximum: MAX_LICENSE_LIMIT }),
+		),
+		trialDurationMin: t.Optional(
+			t.Integer({ minimum: 0, maximum: MAX_LICENSE_LIMIT }),
+		),
 		customFields: t.Optional(t.Record(t.String(), t.Unknown())),
 		expiresAt: t.Optional(
 			t.Union([t.String({ format: "date-time" }), t.Null()]),
@@ -252,16 +266,28 @@ export const ApiKeyResponseSchema = t.Object({
 	}),
 	type: KeyTypeSchema,
 	limitIp: t.Integer({
+		minimum: 0,
+		maximum: MAX_LICENSE_LIMIT,
 		description: "Maximum registered IP addresses; zero is unlimited.",
 	}),
 	limitHwid: t.Integer({
+		minimum: 0,
+		maximum: MAX_LICENSE_LIMIT,
 		description: "Maximum registered devices; zero is unlimited.",
 	}),
 	limitConcurrent: t.Integer({
+		minimum: 0,
+		maximum: MAX_LICENSE_LIMIT,
 		description: "Maximum concurrent sessions; zero is unlimited.",
 	}),
-	limitUsage: t.Integer({ description: "Remaining usage allowance." }),
+	limitUsage: t.Integer({
+		minimum: 0,
+		maximum: MAX_LICENSE_LIMIT,
+		description: "Remaining usage allowance.",
+	}),
 	trialDurationMin: t.Integer({
+		minimum: 0,
+		maximum: MAX_LICENSE_LIMIT,
 		description: "Trial duration in minutes; zero disables the trial.",
 	}),
 	firstActivatedAt: t.Nullable(
@@ -282,8 +308,32 @@ export const ApiKeyResponseSchema = t.Object({
 export const ErrorResponseSchema = t.Object({
 	error: t.String({
 		description: "Safe, human-readable error message.",
-		examples: ["Invalid API key"],
+		examples: ["Invalid or revoked API key"],
 	}),
+	code: t.Enum(
+		{
+			INVALID_REQUEST: "INVALID_REQUEST",
+			UNAUTHORIZED: "UNAUTHORIZED",
+			NOT_FOUND: "NOT_FOUND",
+			CONFLICT: "CONFLICT",
+			RATE_LIMITED: "RATE_LIMITED",
+			INTERNAL_ERROR: "INTERNAL_ERROR",
+			LICENSE_INVALID_OR_REVOKED: "LICENSE_INVALID_OR_REVOKED",
+			IP_NOT_WHITELISTED: "IP_NOT_WHITELISTED",
+			HWID_NOT_WHITELISTED: "HWID_NOT_WHITELISTED",
+			TRIAL_EXPIRED: "TRIAL_EXPIRED",
+			SUBSCRIPTION_EXPIRED: "SUBSCRIPTION_EXPIRED",
+			SESSION_INVALID_OR_EXPIRED: "SESSION_INVALID_OR_EXPIRED",
+			CONCURRENT_SESSION_LIMIT: "CONCURRENT_SESSION_LIMIT",
+			USAGE_EXHAUSTED: "USAGE_EXHAUSTED",
+			IP_REGISTRATION_LIMIT: "IP_REGISTRATION_LIMIT",
+			HWID_REGISTRATION_LIMIT: "HWID_REGISTRATION_LIMIT",
+		},
+		{
+			description:
+				"Stable machine-readable error identifier. Clients should branch on this value rather than the message.",
+		},
+	),
 });
 
 export const HandshakeResponseSchema = t.Object(
@@ -293,6 +343,11 @@ export const HandshakeResponseSchema = t.Object(
 		customFields: JsonObjectSchema,
 		sessionToken: t.String({
 			description: "Opaque token used for heartbeats and logout.",
+		}),
+		sessionTtlSeconds: t.Integer({
+			minimum: 1,
+			description:
+				"Server-side session lifetime. Heartbeats must run safely within this window.",
 		}),
 	},
 	{

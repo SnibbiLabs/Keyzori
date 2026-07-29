@@ -15,7 +15,7 @@ import { DomainError } from "./domain/errors";
 import { RedisSessionRepository } from "./infrastructure/repositories/RedisSessionRepository";
 import { openApiDescription } from "./openapi/documentation";
 import { scalarThemeCss } from "./openapi/theme";
-import { rateLimiter } from "./plugins/ratelimit";
+import { createRateLimitDependencies, rateLimiter } from "./plugins/ratelimit";
 import { version } from "../package.json";
 
 export const createServer = (redis: RedisClient, config?: ServerConfig) => {
@@ -27,9 +27,28 @@ export const createServer = (redis: RedisClient, config?: ServerConfig) => {
 			.split(",")
 			.map((value) => value.trim())
 			.filter(Boolean);
-	const clientIpOptions = { trustProxyHeaders, trustedProxyCidrs };
-	const requestsPerMinute =
+	const trustedProxyHeader =
+		config?.trustedProxyHeader ??
+		(Bun.env.TRUSTED_PROXY_HEADER === "cf-connecting-ip"
+			? "cf-connecting-ip"
+			: "x-forwarded-for");
+	const clientIpOptions = {
+		trustProxyHeaders,
+		trustedProxyCidrs,
+		trustedProxyHeader,
+	} as const;
+	const adminRequestsPerMinute =
 		config?.rateLimitPerMinute ?? Number(Bun.env.RATE_LIMIT_PER_MINUTE ?? 60);
+	const licenseRequestsPerMinute =
+		config?.licenseRateLimitPerMinute ??
+		Number(Bun.env.LICENSE_RATE_LIMIT_PER_MINUTE ?? 30);
+	const ipRequestsPerMinute =
+		config?.rateLimitPerIpPerMinute ??
+		Number(Bun.env.RATE_LIMIT_PER_IP_PER_MINUTE ?? 6_000);
+	const { limiter, clientIpResolver } = createRateLimitDependencies(
+		redis,
+		clientIpOptions,
+	);
 	const sessionRepository = new RedisSessionRepository(redis);
 
 	const adminService = createAdminService();
@@ -119,14 +138,17 @@ export const createServer = (redis: RedisClient, config?: ServerConfig) => {
 		.onError(({ code, error, set }) => {
 			if (error instanceof DomainError) {
 				set.status = error.statusCode;
-				return { error: error.message };
+				return { error: error.message, code: error.code };
 			}
 			if (code === "INTERNAL_SERVER_ERROR" || code === "UNKNOWN") {
 				console.error(
 					JSON.stringify({ level: "error", event: "request_failed", code }),
 				);
 				set.status = 500;
-				return { error: "Internal Server Error" };
+				return {
+					error: "Internal Server Error",
+					code: "INTERNAL_ERROR" as const,
+				};
 			}
 		})
 		.onAfterHandle(({ set }) => {
@@ -145,7 +167,7 @@ export const createServer = (redis: RedisClient, config?: ServerConfig) => {
 				tags: ["System"],
 			},
 		})
-		.use(rateLimiter(redis, requestsPerMinute, clientIpOptions))
+		.use(rateLimiter(limiter, ipRequestsPerMinute, clientIpResolver))
 		.get(
 			"/ready",
 			async ({ set }) => {
@@ -171,13 +193,23 @@ export const createServer = (redis: RedisClient, config?: ServerConfig) => {
 				},
 			},
 		)
-		.use(handshakePlugin(handshakeService, clientIpOptions))
+		.use(
+			handshakePlugin(handshakeService, clientIpOptions, {
+				limiter,
+				requestsPerMinute: licenseRequestsPerMinute,
+			}),
+		)
 		.use(
 			adminPlugin(
 				adminService,
 				config
 					? [config.adminApiKey, ...config.additionalAdminApiKeys]
 					: undefined,
+				{
+					limiter,
+					clientIpResolver,
+					requestsPerMinute: adminRequestsPerMinute,
+				},
 			),
 		);
 };
