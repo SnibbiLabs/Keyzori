@@ -6,6 +6,7 @@ import type {
 	LicenseClientConfig,
 	LicenseEvents,
 	JsonObject,
+	LicenseErrorCode,
 	LogLevel,
 } from "./types";
 
@@ -14,9 +15,12 @@ interface HandshakePayload {
 	type: KeyType;
 	customFields: JsonObject;
 	sessionToken: string;
+	sessionTtlSeconds: number;
 }
 
 const DEFAULT_MAX_RESPONSE_BODY_BYTES = 262_144;
+const DEFAULT_SESSION_TTL_SECONDS = 45;
+const MAX_SESSION_TTL_SECONDS = 86_400;
 
 type ClientState = "idle" | "initializing" | "active" | "destroyed";
 
@@ -32,12 +36,13 @@ const LOG_LEVELS: Record<LogLevel, number> = {
 export class LicenseClient {
 	public readonly events: LicenseEvents;
 
-	private readonly hardware = new HardwareManager();
+	private readonly hardware: HardwareManager;
 	private readonly network: NetworkClient;
 	private readonly eventBroker: EventBroker;
-	private readonly heartbeatIntervalMs: number;
+	private readonly requestedHeartbeatIntervalMs: number;
 	private readonly maxRetries: number;
 	private readonly logLevel: LogLevel;
+	private heartbeatIntervalMs: number;
 	private heartbeatTimer?: ReturnType<typeof setTimeout>;
 	private initialization?: Promise<JsonObject>;
 	private destruction?: Promise<void>;
@@ -52,12 +57,14 @@ export class LicenseClient {
 			this.log("warn", "A license event listener threw an error");
 		});
 		this.events = this.eventBroker;
+		this.hardware = new HardwareManager(config.hardwareId);
 		this.network = new NetworkClient(
 			config.serverUrl,
 			config.apiKey,
 			config.requestTimeoutMs ?? 10_000,
 		);
-		this.heartbeatIntervalMs = config.heartbeatIntervalMs ?? 30_000;
+		this.requestedHeartbeatIntervalMs = config.heartbeatIntervalMs ?? 30_000;
+		this.heartbeatIntervalMs = this.requestedHeartbeatIntervalMs;
 		this.maxRetries = config.maxRetries ?? 2;
 	}
 
@@ -82,7 +89,11 @@ export class LicenseClient {
 				this.hardware.getHwid(),
 			);
 			if (!response.ok) {
-				throw new Error(`License Block: ${await this.readError(response)}`);
+				const rejection = await this.readError(response);
+				if (response.status === 403) {
+					this.emitLicenseRejection(rejection);
+				}
+				throw new Error(`License Block: ${rejection.message}`);
 			}
 
 			const payload = await this.readHandshake(response);
@@ -91,6 +102,9 @@ export class LicenseClient {
 			}
 			this.customFields = payload.customFields;
 			this.network.setSessionToken(payload.sessionToken);
+			this.heartbeatIntervalMs = this.clampHeartbeatInterval(
+				payload.sessionTtlSeconds,
+			);
 			this.state = "active";
 			this.eventBroker.emit("ready", payload.customFields);
 			this.log("info", `License initialized as ${payload.type}`);
@@ -123,11 +137,23 @@ export class LicenseClient {
 		) {
 			throw new Error("License server returned an invalid handshake response");
 		}
+		const sessionTtlSeconds =
+			"sessionTtlSeconds" in payload
+				? payload.sessionTtlSeconds
+				: DEFAULT_SESSION_TTL_SECONDS;
+		if (
+			!Number.isInteger(sessionTtlSeconds) ||
+			(sessionTtlSeconds as number) < 1 ||
+			(sessionTtlSeconds as number) > MAX_SESSION_TTL_SECONDS
+		) {
+			throw new Error("License server returned an invalid session TTL");
+		}
 		return {
 			success: true,
 			type: payload.type,
 			customFields: payload.customFields as JsonObject,
 			sessionToken: payload.sessionToken,
+			sessionTtlSeconds: sessionTtlSeconds as number,
 		};
 	}
 
@@ -137,7 +163,9 @@ export class LicenseClient {
 		);
 	}
 
-	private async readError(response: Response): Promise<string> {
+	private async readError(
+		response: Response,
+	): Promise<{ message: string; code?: string }> {
 		const payload = await this.readJson(response);
 		if (
 			payload !== null &&
@@ -145,9 +173,14 @@ export class LicenseClient {
 			"error" in payload &&
 			typeof payload.error === "string"
 		) {
-			return payload.error;
+			return {
+				message: payload.error,
+				...("code" in payload && typeof payload.code === "string"
+					? { code: payload.code }
+					: {}),
+			};
 		}
-		return `HTTP ${response.status}`;
+		return { message: `HTTP ${response.status}` };
 	}
 
 	private async readJson(response: Response): Promise<unknown> {
@@ -192,36 +225,42 @@ export class LicenseClient {
 		}
 	}
 
-	private scheduleHeartbeat(): void {
+	private scheduleHeartbeat(delayMs = this.heartbeatIntervalMs): void {
 		if (this.state !== "active") return;
-		this.heartbeatTimer = setTimeout(
-			() => void this.runHeartbeat(),
-			this.heartbeatIntervalMs,
-		);
+		this.heartbeatTimer = setTimeout(() => void this.runHeartbeat(), delayMs);
 		this.heartbeatTimer.unref();
 	}
 
 	private async runHeartbeat(): Promise<void> {
 		if (this.state !== "active") return;
+		let nextDelayMs = this.heartbeatIntervalMs;
 		try {
 			const response = await this.network.sendHandshake(
 				this.hardware.getHwid(),
 			);
 			if (!response.ok) {
+				if (response.status === 429) {
+					nextDelayMs = this.retryAfterMs(response);
+					this.eventBroker.emit("heartbeat:throttled", nextDelayMs);
+					this.log("warn", `Heartbeat throttled; retrying in ${nextDelayMs}ms`);
+					return;
+				}
 				if (response.status === 403) {
-					const reason = await this.readError(response);
-					this.eventBroker.emit(
-						/expired/i.test(reason) ? "license:expired" : "license:revoked",
-						reason,
-					);
-					this.handleFatalError(reason);
+					const rejection = await this.readError(response);
+					this.emitLicenseRejection(rejection);
+					this.handleFatalError(rejection.message);
 					return;
 				}
 				this.recordHeartbeatFailure(`HTTP ${response.status}`);
 				return;
 			}
 
-			await this.readHandshake(response);
+			const payload = await this.readHandshake(response);
+			this.network.setSessionToken(payload.sessionToken);
+			this.heartbeatIntervalMs = this.clampHeartbeatInterval(
+				payload.sessionTtlSeconds,
+			);
+			nextDelayMs = this.heartbeatIntervalMs;
 			this.failureStrikes = 0;
 			this.eventBroker.emit("heartbeat:success");
 			this.log("debug", "Heartbeat succeeded");
@@ -230,8 +269,73 @@ export class LicenseClient {
 				error instanceof Error ? error.message : "Network error",
 			);
 		} finally {
-			this.scheduleHeartbeat();
+			this.scheduleHeartbeat(nextDelayMs);
 		}
+	}
+
+	private clampHeartbeatInterval(sessionTtlSeconds: number): number {
+		const safeMaximumMs = Math.max(
+			1,
+			Math.floor((sessionTtlSeconds * 1_000 * 2) / 3),
+		);
+		return Math.min(this.requestedHeartbeatIntervalMs, safeMaximumMs);
+	}
+
+	private retryAfterMs(response: Response): number {
+		const value = response.headers.get("retry-after")?.trim();
+		if (!value) return this.heartbeatIntervalMs;
+		if (/^\d+$/.test(value)) {
+			const seconds = Number(value);
+			if (Number.isSafeInteger(seconds)) return Math.max(1, seconds * 1_000);
+		}
+		const date = Date.parse(value);
+		if (Number.isFinite(date)) return Math.max(1, date - Date.now());
+		return this.heartbeatIntervalMs;
+	}
+
+	private emitLicenseRejection(rejection: {
+		message: string;
+		code?: string;
+	}): void {
+		const { message, code } = rejection;
+		if (code === "TRIAL_EXPIRED" || code === "SUBSCRIPTION_EXPIRED") {
+			this.eventBroker.emit("license:expired", message);
+			return;
+		}
+		if (code === "LICENSE_INVALID_OR_REVOKED") {
+			this.eventBroker.emit("license:revoked", message);
+			return;
+		}
+		if (code === "SESSION_INVALID_OR_EXPIRED") {
+			this.eventBroker.emit("session:expired", message);
+			return;
+		}
+		if (this.isLicenseErrorCode(code)) {
+			this.eventBroker.emit("license:rejected", message);
+			return;
+		}
+
+		// Compatibility with servers released before structured error codes.
+		if (/trial|subscription/i.test(message) && /expired/i.test(message)) {
+			this.eventBroker.emit("license:expired", message);
+		} else if (/session/i.test(message) && /expired|invalid/i.test(message)) {
+			this.eventBroker.emit("session:expired", message);
+		} else {
+			this.eventBroker.emit("license:revoked", message);
+		}
+	}
+
+	private isLicenseErrorCode(
+		value: string | undefined,
+	): value is LicenseErrorCode {
+		return (
+			value === "IP_NOT_WHITELISTED" ||
+			value === "HWID_NOT_WHITELISTED" ||
+			value === "CONCURRENT_SESSION_LIMIT" ||
+			value === "USAGE_EXHAUSTED" ||
+			value === "IP_REGISTRATION_LIMIT" ||
+			value === "HWID_REGISTRATION_LIMIT"
+		);
 	}
 
 	private recordHeartbeatFailure(message: string): void {
@@ -260,7 +364,13 @@ export class LicenseClient {
 
 	private async releaseSession(): Promise<void> {
 		try {
-			await this.network.sendLogout(this.hardware.getHwid());
+			const response = await this.network.sendLogout(this.hardware.getHwid());
+			if (!response.ok) {
+				this.log(
+					"warn",
+					`Could not release the license session: HTTP ${response.status}`,
+				);
+			}
 		} catch {
 			this.log("warn", "Could not release the license session");
 		} finally {
@@ -270,6 +380,16 @@ export class LicenseClient {
 
 	private assertConfig(config: LicenseClientConfig): void {
 		if (!config.apiKey.trim()) throw new Error("apiKey is required");
+		if (
+			config.hardwareId !== undefined &&
+			(typeof config.hardwareId !== "string" ||
+				config.hardwareId.trim().length < 1 ||
+				config.hardwareId.trim().length > 1_024)
+		) {
+			throw new Error(
+				"hardwareId must contain between 1 and 1024 trimmed characters",
+			);
+		}
 		for (const [name, value] of [
 			["heartbeatIntervalMs", config.heartbeatIntervalMs],
 			["maxRetries", config.maxRetries],

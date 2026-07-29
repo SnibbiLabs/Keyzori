@@ -8,6 +8,8 @@ import os from "node:os";
 export class HardwareManager {
 	private cachedHwid?: string;
 
+	constructor(private readonly hardwareId?: string) {}
+
 	/**
 	 * Generates a consistent SHA-256 Hardware ID (HWID) based on the system's
 	 * MAC addresses, OS platform, architecture, and CPU count.
@@ -18,6 +20,13 @@ export class HardwareManager {
 	 */
 	public getHwid(): string {
 		if (this.cachedHwid) return this.cachedHwid;
+
+		if (this.hardwareId !== undefined) {
+			this.cachedHwid = createHash("sha256")
+				.update(this.hardwareId.trim())
+				.digest("hex");
+			return this.cachedHwid;
+		}
 
 		const interfaces = os.networkInterfaces();
 		const macAddresses: string[] = [];

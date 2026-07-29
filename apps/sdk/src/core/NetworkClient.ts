@@ -40,6 +40,7 @@ export class NetworkClient {
 				hwid,
 				...(this.sessionToken ? { sessionToken: this.sessionToken } : {}),
 			}),
+			redirect: "error",
 			signal: AbortSignal.timeout(this.requestTimeoutMs),
 		});
 	}
@@ -60,6 +61,7 @@ export class NetworkClient {
 				hwid,
 				sessionToken: this.sessionToken,
 			}),
+			redirect: "error",
 			signal: AbortSignal.timeout(this.requestTimeoutMs),
 		});
 	}

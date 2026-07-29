@@ -5,6 +5,7 @@ export type {
 	JsonPrimitive,
 	JsonValue,
 	LicenseClientConfig,
+	LicenseErrorCode,
 	LicenseEventMap,
 	LicenseEvents,
 	LogLevel,

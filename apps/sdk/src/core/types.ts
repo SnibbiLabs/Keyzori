@@ -11,6 +11,19 @@ export type LogLevel = "none" | "error" | "warn" | "info" | "debug";
 /** License type returned by the server after validation. */
 export type KeyType = "PERPETUAL" | "SUBSCRIPTION" | "USAGE";
 
+/** Stable server error identifiers used for runtime licensing decisions. */
+export type LicenseErrorCode =
+	| "LICENSE_INVALID_OR_REVOKED"
+	| "IP_NOT_WHITELISTED"
+	| "HWID_NOT_WHITELISTED"
+	| "TRIAL_EXPIRED"
+	| "SUBSCRIPTION_EXPIRED"
+	| "SESSION_INVALID_OR_EXPIRED"
+	| "CONCURRENT_SESSION_LIMIT"
+	| "USAGE_EXHAUSTED"
+	| "IP_REGISTRATION_LIMIT"
+	| "HWID_REGISTRATION_LIMIT";
+
 /** A scalar value accepted in license custom fields. */
 export type JsonPrimitive = string | number | boolean | null;
 
@@ -33,6 +46,13 @@ export interface LicenseClientConfig {
 	 * The fully qualified URL of the Keyzori Licensing Server.
 	 */
 	serverUrl: string;
+
+	/**
+	 * Optional application-specific machine identifier. The trimmed value must
+	 * contain 1–1024 characters and is transmitted only as a SHA-256 digest.
+	 * When omitted, the legacy automatic hardware identifier is used unchanged.
+	 */
+	hardwareId?: string;
 
 	/**
 	 * Interval in milliseconds between successive heartbeat/handshake requests.
@@ -83,6 +103,13 @@ export interface LicenseEventMap {
 	"heartbeat:failed": (error: string, strikes: number) => void;
 
 	/**
+	 * Emitted when the server rate limits a heartbeat. Throttling does not count
+	 * as a failed-heartbeat strike.
+	 * @param retryAfterMs - Delay selected from the Retry-After response header.
+	 */
+	"heartbeat:throttled": (retryAfterMs: number) => void;
+
+	/**
 	 * Emitted if the server explicitly rejects the license due to revocation or admin action.
 	 * @param reason - Server provided reason for revocation.
 	 */
@@ -93,6 +120,12 @@ export interface LicenseEventMap {
 	 * @param reason - Server provided explanation for the expiration.
 	 */
 	"license:expired": (reason: string) => void;
+
+	/** Emitted when the current server-side session has expired. */
+	"session:expired": (reason: string) => void;
+
+	/** Emitted for a runtime policy rejection that is not expiry or revocation. */
+	"license:rejected": (reason: string) => void;
 
 	/**
 	 * Emitted when consecutive heartbeat failures exceed `maxRetries`.

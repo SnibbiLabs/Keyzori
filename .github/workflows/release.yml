@@ -88,6 +88,8 @@ jobs:
         run: bun run db:check
       - name: Build distributable artifacts
         run: bun run build
+      - name: Verify compiled downstream SDK consumer
+        run: bun run test:sdk:compiled
       - name: Smoke-test package artifacts
         run: bun run smoke:packages
       - name: Package release assets
