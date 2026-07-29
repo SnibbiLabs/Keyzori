@@ -6,6 +6,21 @@ import type {
 } from "../../domain/repositories/IUserRepository";
 import type { Database } from "../../db";
 import { users } from "../../db/schema";
+import { ConflictError } from "../../domain/errors";
+
+function translateDuplicateEmail(error: unknown): never {
+	if (
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		error.code === "23505" &&
+		"constraint" in error &&
+		error.constraint === "User_email_key"
+	) {
+		throw new ConflictError("A user with this email already exists");
+	}
+	throw error;
+}
 
 export class DrizzleUserRepository implements IUserRepository {
 	constructor(private readonly db: Database) {}
@@ -15,13 +30,17 @@ export class DrizzleUserRepository implements IUserRepository {
 		name: string,
 		customFields: JsonObject,
 	): Promise<User> {
-		const rows = await this.db
-			.insert(users)
-			.values({ id: crypto.randomUUID(), email, name, customFields })
-			.returning();
-		const user = rows[0];
-		if (!user) throw new Error("Database returned no created user.");
-		return user;
+		try {
+			const rows = await this.db
+				.insert(users)
+				.values({ id: crypto.randomUUID(), email, name, customFields })
+				.returning();
+			const user = rows[0];
+			if (!user) throw new Error("Database returned no created user.");
+			return user;
+		} catch (error) {
+			return translateDuplicateEmail(error);
+		}
 	}
 
 	async findAll(): Promise<User[]> {
@@ -38,14 +57,18 @@ export class DrizzleUserRepository implements IUserRepository {
 	}
 
 	async update(id: string, data: UserUpdate): Promise<User> {
-		const rows = await this.db
-			.update(users)
-			.set(data)
-			.where(eq(users.id, id))
-			.returning();
-		const user = rows[0];
-		if (!user) throw new Error("Database returned no updated user.");
-		return user;
+		try {
+			const rows = await this.db
+				.update(users)
+				.set(data)
+				.where(eq(users.id, id))
+				.returning();
+			const user = rows[0];
+			if (!user) throw new Error("Database returned no updated user.");
+			return user;
+		} catch (error) {
+			return translateDuplicateEmail(error);
+		}
 	}
 
 	async delete(id: string): Promise<void> {

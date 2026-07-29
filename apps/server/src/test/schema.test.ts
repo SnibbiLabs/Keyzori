@@ -36,6 +36,13 @@ describe("database schema", () => {
 		expect(apiKeyConfig.foreignKeys.map((key) => key.getName())).toEqual([
 			"ApiKey_userId_fkey",
 		]);
+		expect(apiKeyConfig.checks.map((check) => check.name)).toEqual([
+			"ApiKey_limitIp_nonnegative",
+			"ApiKey_limitHwid_nonnegative",
+			"ApiKey_limitConcurrent_nonnegative",
+			"ApiKey_limitUsage_nonnegative",
+			"ApiKey_trialDurationMin_nonnegative",
+		]);
 		expect(ipConfig.indexes.map((index) => index.config.name)).toEqual([
 			"IpWhitelist_apiKeyId_ip_key",
 		]);

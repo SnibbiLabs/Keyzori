@@ -115,6 +115,13 @@ describe("AdminService", () => {
 		expect(
 			service.createKey({
 				userId: "u1",
+				type: "PERPETUAL",
+				limitIp: 2_147_483_648,
+			}),
+		).rejects.toThrow("2147483647");
+		expect(
+			service.createKey({
+				userId: "u1",
 				type: "SUBSCRIPTION",
 				expiresAt: "not-a-date",
 			}),

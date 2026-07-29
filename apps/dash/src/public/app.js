@@ -497,23 +497,23 @@ function keyFields(key) {
 			</div>
 			<div class="field">
 				<label for="limit-hwid">HWID limit</label>
-				<input id="limit-hwid" name="limitHwid" type="number" min="0" step="1" value="0" required />
+				<input id="limit-hwid" name="limitHwid" type="number" min="0" max="2147483647" step="1" value="0" required />
 			</div>
 			<div class="field">
 				<label for="limit-ip">IP limit</label>
-				<input id="limit-ip" name="limitIp" type="number" min="0" step="1" value="0" required />
+				<input id="limit-ip" name="limitIp" type="number" min="0" max="2147483647" step="1" value="0" required />
 			</div>
 			<div class="field">
 				<label for="limit-concurrent">Concurrent limit</label>
-				<input id="limit-concurrent" name="limitConcurrent" type="number" min="0" step="1" value="0" required />
+				<input id="limit-concurrent" name="limitConcurrent" type="number" min="0" max="2147483647" step="1" value="0" required />
 			</div>
 			<div class="field">
 				<label for="limit-usage">Usage balance</label>
-				<input id="limit-usage" name="limitUsage" type="number" min="0" step="1" value="0" required />
+				<input id="limit-usage" name="limitUsage" type="number" min="0" max="2147483647" step="1" value="0" required />
 			</div>
 			<div class="field">
 				<label for="trial-duration">Trial minutes</label>
-				<input id="trial-duration" name="trialDurationMin" type="number" min="0" step="1" value="0" required />
+				<input id="trial-duration" name="trialDurationMin" type="number" min="0" max="2147483647" step="1" value="0" required />
 			</div>
 		</div>
 		<div class="field full">

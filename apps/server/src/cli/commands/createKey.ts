@@ -2,6 +2,7 @@ import type { Command } from "commander";
 import type { JsonObject, JsonValue, KeyType } from "../../domain/entities";
 import type { AdminOperations } from "../AdminOperations";
 import { reportCommandError } from "../commandError";
+import { MAX_LICENSE_LIMIT } from "../../domain/licenseLimits";
 
 interface CreateKeyOptions {
 	userId: string;
@@ -19,7 +20,13 @@ function parseNonNegativeInteger(value: string): number {
 	if (!/^\d+$/.test(value)) {
 		throw new Error(`Expected a non-negative integer, received "${value}".`);
 	}
-	return Number(value);
+	const parsed = Number(value);
+	if (parsed > MAX_LICENSE_LIMIT) {
+		throw new Error(
+			`Expected a value no greater than ${MAX_LICENSE_LIMIT}, received "${value}".`,
+		);
+	}
+	return parsed;
 }
 
 function parseKeyType(value: string): KeyType {

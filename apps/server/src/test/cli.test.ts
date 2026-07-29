@@ -36,4 +36,14 @@ describe("server administration CLI", () => {
 			"Expected a non-negative integer",
 		);
 	});
+
+	it("rejects limits above PostgreSQL's integer ceiling", async () => {
+		const result =
+			await $`bun ${cliEntrypoint} create-key --user-id u1 --limit-ip 2147483648`
+				.env({ ...process.env, DATABASE_URL: "" })
+				.quiet()
+				.nothrow();
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr.toString()).toContain("no greater than 2147483647");
+	});
 });

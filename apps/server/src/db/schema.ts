@@ -1,5 +1,7 @@
+import { sql } from "drizzle-orm";
 import {
 	boolean,
+	check,
 	foreignKey,
 	integer,
 	jsonb,
@@ -45,6 +47,17 @@ export const apiKeys = pgTable(
 		createdAt: timestamp({ mode: "date", precision: 3 }).notNull().defaultNow(),
 	},
 	(table) => [
+		check("ApiKey_limitIp_nonnegative", sql`${table.limitIp} >= 0`),
+		check("ApiKey_limitHwid_nonnegative", sql`${table.limitHwid} >= 0`),
+		check(
+			"ApiKey_limitConcurrent_nonnegative",
+			sql`${table.limitConcurrent} >= 0`,
+		),
+		check("ApiKey_limitUsage_nonnegative", sql`${table.limitUsage} >= 0`),
+		check(
+			"ApiKey_trialDurationMin_nonnegative",
+			sql`${table.trialDurationMin} >= 0`,
+		),
 		foreignKey({
 			columns: [table.userId],
 			foreignColumns: [users.id],

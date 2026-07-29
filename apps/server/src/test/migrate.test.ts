@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, mock, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -42,5 +42,15 @@ describe("migrateDatabase", () => {
 			process.chdir(originalDirectory);
 			rmSync(emptyDirectory, { recursive: true, force: true });
 		}
+	});
+
+	test("fails explicitly instead of rewriting negative legacy limits", () => {
+		const migration = readFileSync(
+			"apps/server/drizzle/20260729061720_colossal_greymalkin/migration.sql",
+			"utf8",
+		);
+		expect(migration).toContain("ApiKey contains negative legacy limit values");
+		expect(migration).toContain('WHERE "limitIp" < 0');
+		expect(migration).not.toMatch(/UPDATE\s+"ApiKey"/i);
 	});
 });
