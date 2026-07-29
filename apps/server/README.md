@@ -49,9 +49,12 @@ Pending migrations are also applied automatically when the production server sta
 | `HOST` | `0.0.0.0` | Server bind address |
 | `PORT` | `3000` | HTTP port |
 | `TRUST_PROXY_HEADERS` | `false` | Trust forwarded IP headers behind a restricted proxy |
+| `TRUSTED_PROXY_HEADER` | `x-forwarded-for` | Select X-Forwarded-For chain or explicit Cloudflare mode |
 | `TRUSTED_PROXY_CIDRS` | empty | Immediate proxy networks allowed to provide forwarded IPs |
 | `OPENAPI_ENABLED` | `true` | Expose Scalar and the OpenAPI document |
-| `RATE_LIMIT_PER_MINUTE` | `60` | Per-client license/admin request budget |
+| `RATE_LIMIT_PER_MINUTE` | `60` | Per-IP administrator request budget |
+| `LICENSE_RATE_LIMIT_PER_MINUTE` | `30` | Per-principal runtime request budget |
+| `RATE_LIMIT_PER_IP_PER_MINUTE` | `6000` | Coarse per-IP abuse ceiling |
 | `MAX_REQUEST_BODY_BYTES` | `65536` | Request body ceiling |
 | `DRIZZLE_MIGRATIONS_PATH` | bundled path | Optional migration-folder override |
 
@@ -83,7 +86,7 @@ The dark monochrome Scalar reference is generated from the same Elysia schemas t
 
 **Limits**
 
-- `limitIp`, `limitHwid`, and `limitConcurrent` use `0` for unlimited.
+- `limitIp`, `limitHwid`, and `limitConcurrent` use `0` for unlimited and accept at most `2147483647`.
 - `USAGE` keys consume one unit when a new session starts.
 - Heartbeats for an existing session consume no additional units.
 - Explicit IP/HWID whitelists run before dynamic registration limits.
@@ -95,7 +98,7 @@ The dark monochrome Scalar reference is generated from the same Elysia schemas t
 
 - `SUBSCRIPTION` keys require a future `expiresAt`.
 - `trialDurationMin` starts on the first successful handshake.
-- Sessions expire after 45 seconds without a successful heartbeat.
+- Sessions expire after 45 seconds without a successful heartbeat, and successful handshakes advertise that TTL to SDKs.
 - Logout releases a session immediately and is idempotent.
 
 </td>
@@ -103,6 +106,8 @@ The dark monochrome Scalar reference is generated from the same Elysia schemas t
 </table>
 
 See the [handshake flow](../../docs/handshake-flow.md) for the exact validation order.
+
+License traffic is limited by a hashed API-key/HWID or session-token principal (30/minute by default) plus a 6,000/minute coarse IP ceiling. Admin routes retain their separate 60/minute IP budget. Every error response includes a stable `code` and `429` responses include `Retry-After`.
 
 ## Build and deploy
 

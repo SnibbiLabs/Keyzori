@@ -84,9 +84,10 @@ Terminate TLS in front of the dashboard, keep secure cookies enabled, and restri
 - Terminate TLS at a trusted reverse proxy or platform load balancer.
 - Keep PostgreSQL and Redis off the public internet.
 - Back up PostgreSQL before deploying schema changes.
-- Set `TRUST_PROXY_HEADERS=true` only when direct access is blocked, and set `TRUSTED_PROXY_CIDRS` to the immediate proxy networks.
+- Set `TRUST_PROXY_HEADERS=true` only when direct access is blocked, set `TRUSTED_PROXY_CIDRS` to every trusted hop, and choose `TRUSTED_PROXY_HEADER`. Use `cf-connecting-ip` only behind Cloudflare.
 - Restrict `/admin/*` at the network layer when possible.
 - Store newly created license secrets immediately; the server hashes them at rest and cannot display them again.
+- Before shipping an SDK update, run `bun run test:sdk:compiled`; CI and release workflows execute the same downstream Bun executable gate on Ubuntu.
 - Pull the published server image as `ghcr.io/lilsnibbi/keyzori:<commit-sha>` for an immutable build, or use its release tag (for example, `v1.0.0`). Pin production deployments to a commit-SHA tag or digest.
 - Send `SIGTERM` during deployments and allow in-flight requests to finish before enforcing a kill timeout.
 - Monitor `/ready`, HTTP error rates, rate-limit responses, PostgreSQL, Redis, and process restarts.
