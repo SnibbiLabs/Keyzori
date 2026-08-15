@@ -243,7 +243,17 @@ describe("integrated dashboard plugin", () => {
 			"connect-src 'self'",
 		);
 		const script = await parent.handle(request("/dashboard/assets/app.js"));
-		expect(await script.text()).toContain("new EventSource");
+		const scriptSource = await script.text();
+		expect(scriptSource).toContain("new EventSource");
+		expect(scriptSource).toContain('id="customer-metadata-rows"');
+		expect(scriptSource).toContain("metadataFromRows");
+		expect(scriptSource).toContain("revealedLicenseKeys");
+		expect(scriptSource).toContain("Full key is not stored");
+		expect(scriptSource).not.toContain('<textarea id="customer-metadata"');
+		const styles = await parent.handle(request("/dashboard/assets/styles.css"));
+		const styleSource = await styles.text();
+		expect(styleSource).toContain(".metadata-row");
+		expect(styleSource).toContain(".license-key-row");
 		const health = await parent.handle(request("/health"));
 		expect(health.headers.get("content-security-policy")).toBeNull();
 	});

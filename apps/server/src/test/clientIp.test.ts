@@ -82,6 +82,22 @@ describe("getClientIp", () => {
 		).toBe("203.0.113.44");
 	});
 
+	test("uses X-Real-IP only in explicit Railway mode", () => {
+		const request = new Request("http://localhost", {
+			headers: {
+				"x-real-ip": "203.0.113.45",
+				"x-forwarded-for": "198.51.100.12",
+			},
+		});
+		expect(
+			getClientIp(request, null, {
+				trustProxyHeaders: true,
+				trustedProxyCidrs: ["127.0.0.0/8"],
+				trustedProxyHeader: "x-real-ip",
+			}),
+		).toBe("203.0.113.45");
+	});
+
 	test("supports wildcard proxy networks", () => {
 		const request = new Request("http://localhost", {
 			headers: { "x-forwarded-for": "203.0.113.10" },
@@ -142,9 +158,19 @@ describe("getClientIp", () => {
 		expect(
 			getClientIp(
 				new Request("http://localhost", {
+					headers: { "x-real-ip": "203.0.113.25" },
+				}),
+				null,
+				options,
+			),
+		).toBe("203.0.113.25");
+		expect(
+			getClientIp(
+				new Request("http://localhost", {
 					headers: {
 						"x-forwarded-for": "203.0.113.30",
 						"cf-connecting-ip": "203.0.113.30",
+						"x-real-ip": "203.0.113.30",
 					},
 				}),
 				null,

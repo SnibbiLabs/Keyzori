@@ -58,6 +58,12 @@ describe("loadServerConfig", () => {
 				KEYZORI_TRUSTED_PROXY_HEADER: "cf-connecting-ip",
 			}).trustedProxyHeader,
 		).toBe("cf-connecting-ip");
+		expect(
+			loadServerConfig({
+				...validEnvironment,
+				KEYZORI_TRUSTED_PROXY_HEADER: "x-real-ip",
+			}).trustedProxyHeader,
+		).toBe("x-real-ip");
 		expect(() =>
 			loadServerConfig({
 				...validEnvironment,
