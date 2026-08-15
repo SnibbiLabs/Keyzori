@@ -20,12 +20,12 @@ A stable release requires:
 1. a reviewed changelog and version;
 2. `bun install --frozen-lockfile`, `bun run check`, `bun run build`, `bun run smoke:packages`, and `bun run db:check`;
 3. the live PostgreSQL/Redis flow and Docker build in CI;
-4. a published npm SDK package, checksummed unified `keyzori` release archive, and versioned GHCR image tied to the source tag;
+4. a published npm SDK package and versioned GHCR image tied to the source tag;
 5. a tested backup, migration, health-check, and rollback plan for the target deployment.
 
 ## Publishing
 
-The repository publishes `keyzori` to npm, attaches the matching checksummed Linux executable archive to a GitHub Release, and pushes the unified container to `ghcr.io/snibbilabs/keyzori`. Every successful `main` commit updates `canary`. Releases receive only `v`-prefixed SemVer tags; stable releases also update `latest`, while prereleases never do. A granular npm token with publish access must be stored as the repository secret `NPM_TOKEN`.
+The repository publishes `keyzori` to npm, creates a GitHub Release with generated notes, and pushes the unified container to `ghcr.io/snibbilabs/keyzori`. Every successful `main` commit updates `canary`. Releases receive only `v`-prefixed SemVer tags; stable releases also update `latest`, while prereleases never do. A granular npm token with publish access must be stored as the repository secret `NPM_TOKEN`.
 
 After the version and changelog are aligned, push the matching tag (for example, `v1.0.0`). The release workflow verifies, builds, integration-tests, and smoke-tests both artifacts before publishing. To repair an existing tag, run the workflow manually and enter that tag. Re-running the same tag is safe when npm already received that version.
 
