@@ -95,17 +95,6 @@ jobs:
         run: bun run test:sdk:compiled
       - name: Smoke-test package artifacts
         run: bun run smoke:packages
-      - name: Package release assets
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p release-assets
-          tar --create --gzip \
-            --file "release-assets/keyzori-${KEYZORI_RELEASE_TAG}-linux-x64.tar.gz" \
-            --directory apps/server/dist \
-            .
-          (cd apps/sdk && bun pm pack --destination ../../release-assets)
-          (cd release-assets && sha256sum ./* > SHA256SUMS)
       - name: Verify live PostgreSQL and Redis flow
         run: bun run --cwd apps/server ../../tests/liveFlow.ts
         env:
@@ -271,10 +260,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if gh release view "${KEYZORI_RELEASE_TAG}" >/dev/null 2>&1; then
-            gh release upload "${KEYZORI_RELEASE_TAG}" release-assets/* --clobber
-          else
-            gh release create "${KEYZORI_RELEASE_TAG}" release-assets/* \
+          if ! gh release view "${KEYZORI_RELEASE_TAG}" >/dev/null 2>&1; then
+            gh release create "${KEYZORI_RELEASE_TAG}" \
               --generate-notes \
               --title "${KEYZORI_RELEASE_TAG}" \
               --verify-tag
