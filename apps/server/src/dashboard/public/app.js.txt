@@ -5,6 +5,7 @@ const state = {
 	view: "licenses",
 	customers: [],
 	licenses: [],
+	revealedLicenseKeys: new Map(),
 	statistics: null,
 	liveEvents: [],
 	search: "",
@@ -32,6 +33,7 @@ const secretDialog = $("#secret-dialog");
 const accessDialog = $("#access-dialog");
 const metersDialog = $("#meters-dialog");
 let toastTimer;
+let metadataRowCounter = 0;
 
 function node(tag, className, text) {
 	const result = document.createElement(tag);
@@ -108,6 +110,7 @@ function disconnectEvents() {
 function showLogin() {
 	disconnectEvents();
 	state.csrfToken = null;
+	state.revealedLicenseKeys.clear();
 	appShell.classList.add("hidden");
 	loginScreen.classList.remove("hidden");
 	setTimeout(() => $("#username").focus(), 0);
@@ -203,20 +206,43 @@ function recordActions(...actions) {
 
 function renderLicenseCard(license) {
 	const customer = customerFor(license.customerId);
+	const revealedKey = state.revealedLicenseKeys.get(license.id);
 	const card = node("article", "record-card");
 	const header = node("header", "record-header");
 	const identity = node("div", "record-identity");
 	identity.append(node("span", "avatar", "K"));
 	const title = node("div", "record-title");
-	title.append(
-		node("strong", "", customer?.name || "Unknown customer"),
-		node("span", "", license.keyPrefix),
-	);
+	title.append(node("strong", "", customer?.name || "Unknown customer"));
 	identity.append(title);
 	const badges = node("div", "badges");
 	const status = licenseStatus(license);
 	badges.append(node("span", "badge", license.type), node("span", `badge ${status}`, status));
 	header.append(identity, badges);
+	const keyDetails = node("div", "license-key-row");
+	const keyCopy = node("div", "license-key-copy");
+	keyCopy.append(
+		node("span", "license-key-label", "License key"),
+		node("code", "", `${license.keyPrefix}${"\u2022".repeat(8)}`),
+		node(
+			"span",
+			"license-key-note",
+			revealedKey
+				? "Available until reload or sign out"
+				: "Full key is not stored and cannot be recovered",
+		),
+	);
+	keyDetails.append(
+		keyCopy,
+		recordActions(
+			revealedKey
+				? button("View key", () => showSecret(revealedKey, license.id))
+				: null,
+			revealedKey
+				? button("Copy key", () => copyLicenseKey(revealedKey))
+				: null,
+			button("Rotate key", () => rotateLicense(license)),
+		),
+	);
 
 	const metrics = node("div", "record-metrics");
 	metrics.append(
@@ -257,12 +283,11 @@ function renderLicenseCard(license) {
 			status === "revoked"
 				? button("Restore", () => restoreLicense(license))
 				: button("Revoke", () => revokeLicense(license)),
-			button("Rotate", () => rotateLicense(license)),
 			button("End sessions", () => terminateSessions(license)),
 			button("Delete", () => deleteLicense(license), true),
 		),
 	);
-	card.append(header, metrics, metadata, footer);
+	card.append(header, keyDetails, metrics, metadata, footer);
 	return card;
 }
 
@@ -501,6 +526,65 @@ function metadataFrom(textarea) {
 	return value;
 }
 
+function metadataInputValue(value) {
+	return typeof value === "string" ? value : JSON.stringify(value);
+}
+
+function metadataValueFrom(raw) {
+	try {
+		return JSON.parse(raw);
+	} catch {
+		return raw;
+	}
+}
+
+function appendMetadataRow(rows, key = "", value = "") {
+	const id = metadataRowCounter++;
+	const row = node("div", "metadata-row");
+	const keyInput = node("input", "metadata-key");
+	keyInput.id = `customer-metadata-key-${id}`;
+	keyInput.type = "text";
+	keyInput.placeholder = "Key";
+	keyInput.autocomplete = "off";
+	keyInput.setAttribute("aria-label", "Metadata key");
+	keyInput.value = key;
+	const valueInput = node("input", "metadata-value");
+	valueInput.id = `customer-metadata-value-${id}`;
+	valueInput.type = "text";
+	valueInput.placeholder = "Value";
+	valueInput.autocomplete = "off";
+	valueInput.spellcheck = false;
+	valueInput.setAttribute("aria-label", `Value for ${key || "metadata field"}`);
+	valueInput.value = metadataInputValue(value);
+	const remove = node("button", "row-action danger", "Remove");
+	remove.type = "button";
+	remove.setAttribute("aria-label", `Remove ${key || "metadata field"}`);
+	remove.addEventListener("click", () => {
+		row.remove();
+		if (!rows.children.length) appendMetadataRow(rows);
+	});
+	row.append(keyInput, valueInput, remove);
+	rows.append(row);
+	return keyInput;
+}
+
+function metadataFromRows(rows) {
+	const metadata = Object.create(null);
+	for (const row of rows.querySelectorAll(".metadata-row")) {
+		const key = row.querySelector(".metadata-key").value.trim();
+		const rawValue = row.querySelector(".metadata-value").value;
+		if (!key) {
+			if (rawValue.trim()) throw new Error("Every metadata value needs a key.");
+			continue;
+		}
+		if (Object.hasOwn(metadata, key)) {
+			throw new Error(`Metadata key '${key}' is duplicated.`);
+		}
+		metadata[key] = metadataValueFrom(rawValue);
+	}
+	return metadata;
+}
+
 function openCustomerEditor(customer = null) {
 	state.editing = { kind: "customer", record: customer };
 	$("#editor-eyebrow").textContent = customer ? "EDIT CUSTOMER" : "NEW CUSTOMER";
@@ -510,12 +594,21 @@ function openCustomerEditor(customer = null) {
 	$("#editor-fields").innerHTML = `
 		<div class="field"><label for="customer-name">Name</label><input id="customer-name" name="name" maxlength="200" required /></div>
 		<div class="field"><label for="customer-email">Email</label><input id="customer-email" name="email" type="email" maxlength="254" required /></div>
-		<div class="field"><label for="customer-metadata">Metadata</label><textarea id="customer-metadata" name="metadata" spellcheck="false">{}</textarea><span class="field-hint">JSON for internal account IDs, company details, or notes. Do not store secrets.</span></div>`;
+		<div class="field"><span class="field-label" id="customer-metadata-label">Metadata</span><div class="metadata-editor" id="customer-metadata" role="group" aria-labelledby="customer-metadata-label"><div class="metadata-columns" aria-hidden="true"><span>Key</span><span>Value</span><span></span></div><div class="metadata-rows" id="customer-metadata-rows"></div><button class="button subtle metadata-add" id="customer-metadata-add" type="button">+ Add field</button></div><span class="field-hint">Plain text is saved as text. Valid JSON values preserve numbers, booleans, arrays, and objects. Do not store secrets.</span></div>`;
 	if (customer) {
 		$("#customer-name").value = customer.name;
 		$("#customer-email").value = customer.email || "";
-		$("#customer-metadata").value = JSON.stringify(customer.metadata || {}, null, 2);
 	}
+	const metadataRows = $("#customer-metadata-rows");
+	const entries = Object.entries(customer?.metadata || {});
+	if (entries.length) {
+		for (const [key, value] of entries) appendMetadataRow(metadataRows, key, value);
+	} else {
+		appendMetadataRow(metadataRows);
+	}
+	$("#customer-metadata-add").addEventListener("click", () =>
+		appendMetadataRow(metadataRows).focus(),
+	);
 	editorDialog.showModal();
 }
 
@@ -593,9 +686,19 @@ function openConfirm(title, copy, label, callback) {
 	confirmDialog.showModal();
 }
 
-function showSecret(value) {
+function showSecret(value, licenseId = null) {
+	if (licenseId) state.revealedLicenseKeys.set(licenseId, value);
 	$("#secret-value").textContent = value;
 	secretDialog.showModal();
+}
+
+async function copyLicenseKey(value) {
+	try {
+		await navigator.clipboard.writeText(value);
+		showToast("License key copied");
+	} catch {
+		showToast("Clipboard access failed. Copy the key manually.", true);
+	}
 }
 
 function deleteCustomer(customer, licenseCount) {
@@ -658,7 +761,7 @@ function rotateLicense(license) {
 		"Rotate key",
 		async () => {
 			const result = await api(`/licenses/${encodeURIComponent(license.id)}/rotate`, { method: "POST" });
-			showSecret(result.licenseKey);
+			showSecret(result.licenseKey, license.id);
 			showToast("License key rotated");
 		},
 	);
@@ -1116,7 +1219,7 @@ $("#editor-form").addEventListener("submit", async (event) => {
 			const payload = {
 				name: form.get("name"),
 				email: form.get("email"),
-				metadata: metadataFrom($("#customer-metadata")),
+				metadata: metadataFromRows($("#customer-metadata-rows")),
 			};
 			await api(record ? `/customers/${encodeURIComponent(record.id)}` : "/customers", {
 				method: record ? "PATCH" : "POST",
@@ -1154,7 +1257,7 @@ $("#editor-form").addEventListener("submit", async (event) => {
 				method: record ? "PATCH" : "POST",
 				body: payload,
 			});
-			if (!record && result.licenseKey) showSecret(result.licenseKey);
+			if (!record && result.licenseKey) showSecret(result.licenseKey, result.id);
 			showToast(record ? "License updated" : "License created");
 		}
 		editorDialog.close();
@@ -1203,12 +1306,7 @@ $("#meter-create-form").addEventListener("submit", async (event) => {
 });
 
 $("#copy-secret").addEventListener("click", async () => {
-	try {
-		await navigator.clipboard.writeText($("#secret-value").textContent);
-		showToast("License key copied");
-	} catch {
-		showToast("Clipboard access failed. Copy the key manually.", true);
-	}
+	await copyLicenseKey($("#secret-value").textContent);
 });
 
 for (const close of $$('[data-close]')) {
