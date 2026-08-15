@@ -139,10 +139,11 @@ function parseTrustedProxyHeaderMode(
 	if (
 		value !== "x-forwarded-for" &&
 		value !== "cf-connecting-ip" &&
+		value !== "x-real-ip" &&
 		value !== "*"
 	) {
 		throw new Error(
-			"KEYZORI_TRUSTED_PROXY_HEADER must be x-forwarded-for, cf-connecting-ip, or *.",
+			"KEYZORI_TRUSTED_PROXY_HEADER must be x-forwarded-for, cf-connecting-ip, x-real-ip, or *.",
 		);
 	}
 	return value;

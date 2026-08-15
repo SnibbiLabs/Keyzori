@@ -2,7 +2,11 @@ import type { Server } from "bun";
 import { BlockList, isIP } from "node:net";
 import { normalizeIpAddress } from "../domain/ipAddress";
 
-export type TrustedProxyHeader = "x-forwarded-for" | "cf-connecting-ip" | "*";
+export type TrustedProxyHeader =
+	| "x-forwarded-for"
+	| "cf-connecting-ip"
+	| "x-real-ip"
+	| "*";
 
 export interface ClientIpOptions {
 	trustProxyHeaders: boolean;
@@ -45,24 +49,28 @@ export class ClientIpResolver {
 
 		const cloudflare = request.headers.get("cf-connecting-ip");
 		const forwarded = request.headers.get("x-forwarded-for");
+		const realIp = request.headers.get("x-real-ip");
 		if (this.header === "*") {
-			const hasCloudflare = cloudflare !== null;
-			const hasForwarded = forwarded !== null;
-			if (!hasCloudflare && !hasForwarded) return socketIp;
-			const cloudflareIp = hasCloudflare
-				? (normalizeIpAddress(cloudflare) ?? socketIp)
-				: null;
-			const forwardedIp = hasForwarded
-				? this.resolveForwardedChain(forwarded, socketIp)
-				: null;
-			if (cloudflareIp && forwardedIp) {
-				return cloudflareIp === forwardedIp ? cloudflareIp : socketIp;
+			const resolved: string[] = [];
+			for (const value of [cloudflare, realIp]) {
+				if (value === null) continue;
+				const normalized = normalizeIpAddress(value);
+				if (!normalized) return socketIp;
+				resolved.push(normalized);
 			}
-			return cloudflareIp ?? forwardedIp ?? socketIp;
+			if (forwarded !== null) {
+				resolved.push(this.resolveForwardedChain(forwarded, socketIp));
+			}
+			if (resolved.length === 0 || new Set(resolved).size !== 1)
+				return socketIp;
+			return resolved[0] ?? socketIp;
 		}
 
 		if (this.header === "cf-connecting-ip") {
 			return normalizeIpAddress(cloudflare ?? "") ?? socketIp;
+		}
+		if (this.header === "x-real-ip") {
+			return normalizeIpAddress(realIp ?? "") ?? socketIp;
 		}
 
 		return this.resolveForwardedChain(forwarded, socketIp);

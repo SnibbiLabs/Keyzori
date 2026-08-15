@@ -67,7 +67,7 @@ export const openApiDescription = [
 	"| `KEYZORI_STRIPE_WEBHOOK_SECRET` | Optional pair | Required with the Stripe secret key; partial configuration fails startup. |",
 	"| `KEYZORI_EVENT_RETENTION_DAYS` | `30` | Detailed activity retention from 1 to 365 days. |",
 	"| `KEYZORI_TRUST_PROXY_HEADERS` | `false` | Trust forwarded client IPs only through configured proxy networks. |",
-	"| `KEYZORI_TRUSTED_PROXY_HEADER` | `x-forwarded-for` | `x-forwarded-for`, `cf-connecting-ip`, or fail-closed `*` selection. |",
+	"| `KEYZORI_TRUSTED_PROXY_HEADER` | `x-forwarded-for` | `x-forwarded-for`, `cf-connecting-ip`, `x-real-ip`, or fail-closed `*` selection. |",
 	"| `KEYZORI_TRUSTED_PROXY_CIDRS` | Conditional | Immediate trusted proxy CIDRs, or `*`. |",
 	"| `KEYZORI_OPENAPI_ENABLED` | `true` | Enable this UI and `/docs/openapi.json`. |",
 	"| `KEYZORI_RATE_LIMIT_PER_MINUTE` | `60` | Admin requests per source IP per minute. |",

@@ -54,6 +54,7 @@ function runtimeConfig(config?: ServerConfig) {
 			trustedProxyHeader:
 				config?.trustedProxyHeader ??
 				(Bun.env.KEYZORI_TRUSTED_PROXY_HEADER === "cf-connecting-ip" ||
+				Bun.env.KEYZORI_TRUSTED_PROXY_HEADER === "x-real-ip" ||
 				Bun.env.KEYZORI_TRUSTED_PROXY_HEADER === "*"
 					? Bun.env.KEYZORI_TRUSTED_PROXY_HEADER
 					: "x-forwarded-for"),

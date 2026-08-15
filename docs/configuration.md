@@ -54,7 +54,7 @@ Proxy headers are ignored by default.
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `KEYZORI_TRUST_PROXY_HEADERS` | `false` | Enables trusted client-IP headers. |
-| `KEYZORI_TRUSTED_PROXY_HEADER` | `x-forwarded-for` | `x-forwarded-for`, `cf-connecting-ip`, or `*` to reconcile both. |
+| `KEYZORI_TRUSTED_PROXY_HEADER` | `x-forwarded-for` | `x-forwarded-for`, `cf-connecting-ip`, `x-real-ip`, or `*` to reconcile all present headers. |
 | `KEYZORI_TRUSTED_PROXY_CIDRS` | Empty | Required when trust is enabled; comma-separated immediate-proxy CIDRs. |
 
 Use `*` for the CIDR value only when a firewall makes direct access impossible. Otherwise list the exact reverse-proxy networks so clients cannot spoof IP-based limits or login throttling.
