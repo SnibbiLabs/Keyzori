@@ -1,0 +1,5 @@
+git checkout main
+git pull
+git tag -d v<#>
+git tag -a v<#> origin/main -m "v0.4.0"
+git push origin refs/tags/v0.4.0
