@@ -1,75 +1,48 @@
-# How Keyzori is structured
+# Architecture
 
-Keyzori License Manager uses strict clean architecture. Business logic does not directly depend on Elysia, Drizzle, PostgreSQL, or Redis.
+Keyzori ships one image containing one compiled `keyzori` executable with three entrypoints:
 
-Instead, dependencies flow inward toward the core Domain layer.
+- `keyzori serve` starts the API, optional dashboard, migration startup, activity retention, and optional Stripe synchronization;
+- `keyzori admin ...` runs operator commands directly against PostgreSQL;
+- `keyzori healthcheck` checks the running server's readiness endpoint.
 
 ```mermaid
-graph TD
-    subgraph "Delivery Layer (Frameworks)"
-        W[Standalone Admin Dashboard]
-        E[Elysia HTTP Routes]
-        C[Commander CLI]
-    end
-
-    subgraph "Infrastructure Layer (External Tools)"
-        P[Drizzle PostgreSQL]
-        R[Redis]
-    end
-
-    subgraph "Application Layer (Use Cases)"
-        AS[AdminService]
-        HS[HandshakeService]
-    end
-
-    subgraph "Domain Layer (Core Entities)"
-        K[IKeyRepository]
-        U[IUserRepository]
-        D[IDeviceRepository]
-        S[ISessionRepository]
-        E2[Domain Errors]
-    end
-
-    W -->|Authenticated HTTP| E
-    E --> AS
-    E --> HS
-    C --> AS
-
-    P -.->|Implements| K
-    P -.->|Implements| U
-    P -.->|Implements| D
-    R -.->|Implements| S
-
-    AS --> K
-    AS --> U
-    HS --> K
-    HS --> D
-    HS --> S
-    AS --> E2
-    HS --> E2
+flowchart LR
+    Product[Licensed product] -->|activate, heartbeat, usage, deactivate| HTTP[Keyzori HTTP process]
+    Operator[Instance operator] --> Dashboard[Embedded dashboard]
+    Operator --> AdminAPI[Admin API]
+    Operator --> CLI[keyzori admin]
+    Dashboard --> Services[Application services]
+    AdminAPI --> Services
+    CLI --> Services
+    HTTP --> Services
+    Services --> Postgres[(PostgreSQL)]
+    Services --> Redis[(Redis)]
+    Stripe[Stripe webhooks and reconciliation] --> Services
+    Services --> Activity[Durable activity]
+    Activity --> Postgres
 ```
 
-## Keyzori layers
+## Layer boundaries
 
-### 1. Domain Layer (`src/domain/`)
-The absolute core of the application. It contains no implementation details. It defines the interfaces for the repositories (`IKeyRepository`, `IDeviceRepository`, `ISessionRepository`) and the core application errors (`DomainError`, `NotFoundError`).
+- Domain entities and repository contracts define customers, licenses, meters, registrations, activity, and Stripe synchronization without importing web or database frameworks.
+- Application services enforce type behavior, status, registration, metering, and operator management.
+- Drizzle repositories implement durable PostgreSQL storage and transactional operations.
+- Redis implements bound sessions, concurrency limits, dashboard sessions, and login throttling.
+- Elysia controllers validate the public runtime/admin contracts. The dashboard calls the same application services directly and never exposes an admin API key to the browser. When disabled, its routes are not mounted.
 
-### 2. Application Layer (`src/application/`)
-This layer holds the pure business logic. `HandshakeService` and `AdminService` are completely agnostic of HTTP requests or SQL queries. They expect their dependencies to be injected into their constructors, making them 100% unit-testable in isolation using mocks.
+## Data and realtime statistics
 
-### 3. Infrastructure Layer (`src/infrastructure/`)
-This layer implements the interfaces defined in the Domain. 
-- `DrizzleKeyRepository` talks to PostgreSQL through Drizzle ORM.
-- `DrizzleUserRepository` stores customers and their operator-only custom fields.
-- `DrizzleDeviceRepository` serializes per-license device registration with PostgreSQL advisory transaction locks.
-- `RedisSessionRepository` atomically tracks concurrent sessions and TTLs through Redis Lua.
+PostgreSQL stores detailed activity for the configured retention period, lifetime counters, and minute buckets for high-volume heartbeat traffic. The dashboard keeps totals lifetime-wide while rendering only the latest 24 hours, aggregated into at most 96 fifteen-minute chart points. A committed event is also published to connected SSE clients, and every initial or reconnected stream refreshes the durable recent snapshot before relying on new live events. Global activity payloads never contain the full license secret, raw IP, or raw device ID. Exact access identifiers are exposed only in the authenticated per-license access view.
 
-### 4. Delivery Layer (`apps/server/src/controllers/` and `apps/server/src/cli/`)
-The outer boundary. Elysia controllers map HTTP requests into application calls and translate domain errors into HTTP responses. Commander commands are a second inbound adapter that invokes `AdminService` directly. The separately deployable dashboard is an authenticated HTTP client: its server-side proxy calls only allowlisted admin routes and never connects to PostgreSQL or Redis. These interfaces contain no business rules.
+Meter consumption uses a database transaction and a unique `(licenseId, eventId)` constraint so retries cannot double-charge. Registration uses a per-license advisory transaction lock. Session admission and refresh use Redis scripts so concurrency and token binding remain atomic.
 
-### 5. Composition (`apps/server/src/composition/`)
-The composition root creates infrastructure repositories and injects them into application services. Both HTTP and CLI entrypoints use this shared wiring, preventing the two operator interfaces from drifting.
+## Optional components
 
-## Deployment boundary
+Dashboard code is compiled into the `keyzori` binary. With `KEYZORI_DISABLE_DASHBOARD=true`, no dashboard assets, login, session, JSON, or SSE routes are mounted; API, admin, health, and documentation routes remain available.
 
-`keyzori-server` and `keyzori-admin` are built from the same server workspace and shipped in the same container. The HTTP process uses PostgreSQL and Redis. An operator runs the CLI as a short-lived process inside that container; it uses PostgreSQL directly and does not loop back through HTTP or require an admin API credential. `apps/dash` is an independent Bun/Elysia deployment that requires the server URL, its own operator password, and a server admin API key.
+Stripe code is enabled only when both Stripe secrets are configured. Verified webhook events are durably queued, deduplicated by Stripe event ID, and processed asynchronously. Processing retrieves current subscription state before updating access, which makes duplicate and out-of-order delivery safe.
+
+## Container boundary
+
+The multi-stage Docker build installs locked dependencies with a BuildKit cache and copies `keyzori`, migrations, and legal notices into a pinned non-root distroless runtime. Compose runs it read-only and drops Linux capabilities. The runtime image includes neither Bun nor `node_modules`.
