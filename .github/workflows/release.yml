@@ -36,7 +36,7 @@ jobs:
     timeout-minutes: 35
     services:
       postgres:
-        image: postgres:18@sha256:3a82e1f56c8f0f5616a11103ac3d47e632c3938698946a7ad26da0df1334744a
+        image: postgres:18
         env:
           POSTGRES_DB: keyzori
           POSTGRES_USER: keyzori
@@ -49,7 +49,7 @@ jobs:
           --health-timeout 5s
           --health-retries 10
       redis:
-        image: redis:8@sha256:234c902a2db49461a129e2d4aeff85b28cf20187ed274a67f6e50995fa713c7b
+        image: redis:8
         ports:
           - 6379:6379
         options: >-

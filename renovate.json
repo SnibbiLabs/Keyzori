@@ -35,17 +35,13 @@
 			"description": "Group Docker image updates",
 			"matchDatasources": ["docker"],
 			"groupName": "Docker images",
-			"addLabels": ["docker"]
+			"addLabels": ["docker"],
+			"pinDigests": false
 		},
 		{
 			"description": "Highlight major updates",
 			"matchUpdateTypes": ["major"],
 			"addLabels": ["major-update"]
-		},
-		{
-			"description": "Identify digest and pin updates",
-			"matchUpdateTypes": ["digest", "pin", "pinDigest"],
-			"addLabels": ["digest"]
 		}
 	]
 }
