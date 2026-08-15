@@ -1,6 +1,6 @@
 {
 	"name": "keyzori-workspace",
-	"version": "0.2.1-test.2",
+	"version": "0.4.0",
 	"license": "Apache-2.0",
 	"description": "Self-hosted software license management server with an operator CLI and client SDK.",
 	"author": "Keyzori contributors",
