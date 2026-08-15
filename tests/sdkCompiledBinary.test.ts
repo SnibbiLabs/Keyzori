@@ -23,7 +23,7 @@ async function runCompiled(
 		env: {
 			...process.env,
 			KEYZORI_TEST_SERVER_URL: serverUrl,
-			KEYZORI_TEST_API_KEY: "compiled-test-key",
+			KEYZORI_TEST_LICENSE_KEY: "lic_compiled-test-key",
 			KEYZORI_TEST_MODE: mode,
 		},
 		stdout: "pipe",
@@ -38,7 +38,9 @@ async function runCompiled(
 }
 
 const compiledDescribe =
-	Bun.env.SDK_COMPILED_TEST_ENABLED === "true" ? describe : describe.skip;
+	Bun.env.KEYZORI_SDK_COMPILED_TEST_ENABLED === "true"
+		? describe
+		: describe.skip;
 
 compiledDescribe("compiled downstream SDK consumer", () => {
 	beforeAll(async () => {
@@ -86,23 +88,34 @@ compiledDescribe("compiled downstream SDK consumer", () => {
 		}
 	});
 
-	test("initializes, clamps heartbeat timing, reuses the session, and logs out", async () => {
+	test("activates, heartbeats, consumes usage, and deactivates", async () => {
 		const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
-		const sessionToken = "11111111-1111-4111-8111-111111111111";
+		const activationToken = "11111111-1111-4111-8111-111111111111";
+		const refreshedToken = "22222222-2222-4222-8222-222222222222";
 		const server = Bun.serve({
 			port: 0,
 			async fetch(request) {
 				const url = new URL(request.url);
 				const body = (await request.json()) as Record<string, unknown>;
 				requests.push({ path: url.pathname, body });
-				if (url.pathname === "/v1/logout") {
+				if (url.pathname === "/v1/deactivate") {
 					return Response.json({ success: true });
 				}
+				if (url.pathname === "/v1/usage") {
+					return Response.json({
+						success: true,
+						meter: body.meter,
+						units: body.units,
+						eventId: body.eventId,
+						remaining: 8,
+					});
+				}
+				const heartbeat = url.pathname === "/v1/heartbeat";
 				return Response.json({
 					success: true,
-					type: "PERPETUAL",
-					customFields: { compiled: true },
-					sessionToken,
+					licenseType: "metered",
+					metadata: { compiled: heartbeat ? "refreshed" : true },
+					sessionToken: heartbeat ? refreshedToken : activationToken,
 					sessionTtlSeconds: 1,
 				});
 			},
@@ -111,20 +124,41 @@ compiledDescribe("compiled downstream SDK consumer", () => {
 			const result = await runCompiled(server.url.toString(), "success");
 			expect(result.exitCode, result.stderr).toBe(0);
 			expect(result.stdout).toContain('"success":true');
+			expect(result.stdout).toContain('"remaining":8');
 			expect(requests.map(({ path }) => path)).toEqual([
-				"/v1/handshake",
-				"/v1/handshake",
-				"/v1/logout",
+				"/v1/activate",
+				"/v1/heartbeat",
+				"/v1/usage",
+				"/v1/deactivate",
 			]);
-			const expectedHwid = createHash("sha256")
-				.update("compiled-consumer-machine")
+			const expectedDeviceId = createHash("sha256")
+				.update("compiled-consumer-device")
 				.digest("hex");
-			expect(requests.every(({ body }) => body.hwid === expectedHwid)).toBe(
-				true,
-			);
-			expect(requests[0]?.body.sessionToken).toBeUndefined();
-			expect(requests[1]?.body.sessionToken).toBe(sessionToken);
-			expect(requests[2]?.body.sessionToken).toBe(sessionToken);
+			expect(
+				requests.every(({ body }) => body.deviceId === expectedDeviceId),
+			).toBe(true);
+			expect(requests[0]?.body).toEqual({
+				licenseKey: "lic_compiled-test-key",
+				deviceId: expectedDeviceId,
+			});
+			expect(requests[1]?.body).toEqual({
+				sessionToken: activationToken,
+				deviceId: expectedDeviceId,
+			});
+			expect(requests[2]?.body).toEqual({
+				sessionToken: refreshedToken,
+				deviceId: expectedDeviceId,
+				meter: "builds",
+				units: 2,
+				eventId: "compiled-event-1",
+			});
+			expect(requests[3]?.body).toEqual({
+				sessionToken: refreshedToken,
+				deviceId: expectedDeviceId,
+			});
+			expect(
+				requests.slice(1).every(({ body }) => !("licenseKey" in body)),
+			).toBe(true);
 		} finally {
 			server.stop(true);
 		}

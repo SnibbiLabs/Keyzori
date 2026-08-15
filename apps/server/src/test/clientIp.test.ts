@@ -82,6 +82,89 @@ describe("getClientIp", () => {
 		).toBe("203.0.113.44");
 	});
 
+	test("supports wildcard proxy networks", () => {
+		const request = new Request("http://localhost", {
+			headers: { "x-forwarded-for": "203.0.113.10" },
+		});
+		expect(
+			getClientIp(request, null, {
+				trustProxyHeaders: true,
+				trustedProxyCidrs: ["*"],
+			}),
+		).toBe("203.0.113.10");
+	});
+
+	test("canonicalizes equivalent IPv6 spellings", () => {
+		const request = new Request("http://localhost", {
+			headers: { "x-forwarded-for": "2001:0DB8:0:0:0:0:0:1" },
+		});
+		expect(
+			getClientIp(request, null, {
+				trustProxyHeaders: true,
+				trustedProxyCidrs: ["*"],
+			}),
+		).toBe("2001:db8::1");
+		const mapped = new Request("http://localhost", {
+			headers: { "x-forwarded-for": "::ffff:192.0.2.128" },
+		});
+		expect(
+			getClientIp(mapped, null, {
+				trustProxyHeaders: true,
+				trustedProxyCidrs: ["*"],
+			}),
+		).toBe("::ffff:192.0.2.128");
+	});
+
+	test("auto-detects supported headers and rejects conflicts", () => {
+		const options = {
+			trustProxyHeaders: true,
+			trustedProxyCidrs: ["*"],
+			trustedProxyHeader: "*" as const,
+		};
+		expect(
+			getClientIp(
+				new Request("http://localhost", {
+					headers: { "x-forwarded-for": "203.0.113.10" },
+				}),
+				null,
+				options,
+			),
+		).toBe("203.0.113.10");
+		expect(
+			getClientIp(
+				new Request("http://localhost", {
+					headers: { "cf-connecting-ip": "203.0.113.20" },
+				}),
+				null,
+				options,
+			),
+		).toBe("203.0.113.20");
+		expect(
+			getClientIp(
+				new Request("http://localhost", {
+					headers: {
+						"x-forwarded-for": "203.0.113.30",
+						"cf-connecting-ip": "203.0.113.30",
+					},
+				}),
+				null,
+				options,
+			),
+		).toBe("203.0.113.30");
+		expect(
+			getClientIp(
+				new Request("http://localhost", {
+					headers: {
+						"x-forwarded-for": "203.0.113.10",
+						"cf-connecting-ip": "203.0.113.20",
+					},
+				}),
+				null,
+				options,
+			),
+		).toBe("127.0.0.1");
+	});
+
 	test("falls back to the socket for malformed or excessive chains", () => {
 		for (const forwarded of [
 			"203.0.113.1, not-an-ip",

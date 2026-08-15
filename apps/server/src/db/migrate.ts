@@ -4,7 +4,7 @@ import { migrate } from "drizzle-orm/bun-sql/postgres/migrator";
 import { db } from ".";
 
 function findMigrationsFolder(): string {
-	const configured = Bun.env.DRIZZLE_MIGRATIONS_PATH;
+	const configured = Bun.env.KEYZORI_DRIZZLE_MIGRATIONS_PATH;
 	const candidates = [
 		configured,
 		resolve(dirname(process.execPath), "drizzle"),
@@ -15,7 +15,7 @@ function findMigrationsFolder(): string {
 	const folder = candidates.find(existsSync);
 	if (!folder) {
 		throw new Error(
-			"Drizzle migrations folder was not found. Set DRIZZLE_MIGRATIONS_PATH.",
+			"Drizzle migrations folder was not found. Set KEYZORI_DRIZZLE_MIGRATIONS_PATH.",
 		);
 	}
 	return folder;

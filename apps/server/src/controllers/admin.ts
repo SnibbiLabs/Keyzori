@@ -1,44 +1,72 @@
 import { timingSafeEqual } from "node:crypto";
 import Elysia, { type Context, t } from "elysia";
-import type { AdminService } from "../application/services/AdminService";
-import type { ClientIpResolver } from "./clientIp";
+import type {
+	AdminService,
+	ManagedLicense,
+	ManagedRevealedLicense,
+} from "../application/services/AdminService";
+import type { ActivityService } from "../application/services/ActivityService";
+import {
+	ACTIVITY_EVENT_TYPES,
+	type ActivityEvent,
+	type ActivityEventType,
+	type JsonObject,
+	type JsonValue,
+} from "../domain/entities";
 import { DomainError } from "../domain/errors";
+import type { StripeLinkResult } from "../integrations/stripe/StripeSubscriptionService";
 import {
 	enforceRateLimit,
 	type RedisSlidingWindowRateLimiter,
 } from "../plugins/ratelimit";
+import type { ClientIpResolver } from "./clientIp";
 import {
-	AdminCreateKeyInputSchema,
-	AdminCreateUserInputSchema,
-	AdminUpdateKeyInputSchema,
-	AdminUpdateUserInputSchema,
-	ApiKeyResponseSchema,
-	ErrorResponseSchema,
-	SuccessResponseSchema,
-	UserResponseSchema,
+	AccessResponseSchema,
+	ConfirmInputSchema,
+	CreatedLicenseResponseSchema,
+	CustomerInputSchema,
+	CustomerPatchSchema,
+	CustomerResponseSchema,
+	DeviceAllowlistInputSchema,
+	IpAllowlistInputSchema,
+	LicenseInputSchema,
+	LicenseMeterResponseSchema,
+	LicensePatchSchema,
+	LicenseResponseSchema,
+	MeterAdjustmentInputSchema,
+	MeterTopUpInputSchema,
+	NewMeterInputSchema,
+	RevokeInputSchema,
+	StripeLinkInputSchema,
+	UsageLedgerResponseSchema,
 } from "./validation";
 
 function configuredAdminKeys(): string[] {
-	return [Bun.env.ADMIN_API_KEY, ...(Bun.env.ADMIN_API_KEYS ?? "").split(",")]
+	return [
+		Bun.env.KEYZORI_ADMIN_API_KEY,
+		...(Bun.env.KEYZORI_ADMIN_API_KEYS ?? "").split(","),
+	]
 		.map((key) => key?.trim())
 		.filter((key): key is string => Boolean(key));
+}
+
+function digest(value: string): Uint8Array {
+	return new Bun.CryptoHasher("sha256").update(value).digest();
 }
 
 export const createAdminAuthMiddleware =
 	(expectedKeys: readonly string[] = configuredAdminKeys()) =>
 	({ request, set }: Context) => {
-		const adminKey = request.headers.get("X-Admin-Key");
-		const suppliedDigest = adminKey
-			? new Bun.CryptoHasher("sha256").update(adminKey).digest()
-			: null;
-		const authenticated = expectedKeys.some((expectedKey) => {
-			if (!suppliedDigest) return false;
-			const expectedDigest = new Bun.CryptoHasher("sha256")
-				.update(expectedKey)
-				.digest();
-			return timingSafeEqual(expectedDigest, suppliedDigest);
-		});
-		if (!adminKey || !authenticated) {
+		const supplied = request.headers.get("x-admin-key");
+		const suppliedDigest = supplied ? digest(supplied) : null;
+		let authenticated = false;
+		if (suppliedDigest) {
+			for (const expected of expectedKeys) {
+				authenticated =
+					timingSafeEqual(digest(expected), suppliedDigest) || authenticated;
+			}
+		}
+		if (!authenticated) {
 			set.status = 401;
 			return { error: "Unauthorized", code: "UNAUTHORIZED" as const };
 		}
@@ -50,12 +78,113 @@ export interface AdminRateLimitOptions {
 	requestsPerMinute: number;
 }
 
-export const adminPlugin = (
+export interface StripeAdminOperations {
+	linkLicense(
+		licenseId: string,
+		subscriptionId: string,
+	): Promise<StripeLinkResult>;
+	unlinkLicense(licenseId: string): Promise<unknown>;
+	syncLicense(licenseId: string): Promise<StripeLinkResult | null>;
+	getLink(licenseId: string): Promise<unknown>;
+}
+
+function presentStripeResult(result: StripeLinkResult | null) {
+	if (!result) return null;
+	const { sessionRevision: _sessionRevision, ...license } = result.license;
+	return { ...result, license };
+}
+
+export function presentLicense<
+	T extends ManagedLicense | ManagedRevealedLicense,
+>(license: T) {
+	const { status, statusReason, ...record } = license;
+	return { ...record, status: { status, reason: statusReason } };
+}
+
+function parseActivityQuery(query: Record<string, unknown>) {
+	let type: ActivityEventType | undefined;
+	if (query.type !== undefined) {
+		if (
+			typeof query.type !== "string" ||
+			!(ACTIVITY_EVENT_TYPES as readonly string[]).includes(query.type)
+		) {
+			throw new DomainError("type is not a supported activity event type");
+		}
+		type = query.type as ActivityEventType;
+	}
+	const parseDate = (name: "from" | "to"): Date | undefined => {
+		const value = query[name];
+		if (value === undefined) return undefined;
+		if (typeof value !== "string") {
+			throw new DomainError(`${name} must be a valid ISO date`);
+		}
+		const date = new Date(value);
+		if (Number.isNaN(date.getTime())) {
+			throw new DomainError(`${name} must be a valid ISO date`);
+		}
+		return date;
+	};
+	const from = parseDate("from");
+	const to = parseDate("to");
+	let limit: number | undefined;
+	if (query.limit !== undefined) {
+		limit = Number(query.limit);
+		if (!Number.isInteger(limit) || limit < 1 || limit > 1_000) {
+			throw new DomainError("limit must be an integer from 1 to 1000");
+		}
+	}
+	return {
+		...(typeof query.licenseId === "string"
+			? { licenseId: query.licenseId }
+			: {}),
+		...(typeof query.customerId === "string"
+			? { customerId: query.customerId }
+			: {}),
+		...(type ? { type } : {}),
+		...(from ? { from } : {}),
+		...(to ? { to } : {}),
+		...(limit ? { limit } : {}),
+	};
+}
+
+function publicDetailValue(value: JsonValue): JsonValue {
+	if (Array.isArray(value)) return value.map(publicDetailValue);
+	if (!value || typeof value !== "object") return value;
+	return Object.fromEntries(
+		Object.entries(value)
+			.filter(([key]) => {
+				const normalized = key.replaceAll("_", "").toLowerCase();
+				return (
+					normalized !== "ip" &&
+					normalized !== "deviceid" &&
+					normalized !== "hwid"
+				);
+			})
+			.map(([key, child]) => [key, publicDetailValue(child)]),
+	);
+}
+
+function publicActivity(event: ActivityEvent) {
+	const { ip: _ip, deviceId: _deviceId, ...safe } = event;
+	return {
+		...safe,
+		details: publicDetailValue(safe.details) as JsonObject,
+	};
+}
+
+export function adminPlugin(
 	adminService: AdminService,
 	adminApiKeys?: readonly string[],
 	rateLimitOptions?: AdminRateLimitOptions,
-) =>
-	new Elysia({ prefix: "/admin", tags: ["Admin"] })
+	activity?: ActivityService,
+	stripe?: StripeAdminOperations,
+) {
+	const app = new Elysia({
+		prefix: "/admin",
+		tags: ["Admin"],
+		normalize: false,
+		detail: { security: [{ AdminKey: [] }] },
+	})
 		.onError(({ code, error, set }) => {
 			if (error instanceof DomainError) {
 				set.status = error.statusCode;
@@ -63,7 +192,26 @@ export const adminPlugin = (
 			}
 			if (code === "VALIDATION") {
 				set.status = 400;
-				return { error: error.message, code: "INVALID_REQUEST" as const };
+				return {
+					error: "Request body or parameters are invalid",
+					code: "INVALID_REQUEST" as const,
+				};
+			}
+			if (
+				error instanceof Error &&
+				"statusCode" in error &&
+				Number.isInteger(error.statusCode) &&
+				Number(error.statusCode) >= 400 &&
+				Number(error.statusCode) < 500
+			) {
+				set.status = Number(error.statusCode);
+				return {
+					error: error.message,
+					code:
+						"code" in error && typeof error.code === "string"
+							? error.code
+							: "INVALID_REQUEST",
+				};
 			}
 		})
 		.onBeforeHandle(async ({ request, server, set }) => {
@@ -78,228 +226,245 @@ export const adminPlugin = (
 		})
 		.onBeforeHandle(createAdminAuthMiddleware(adminApiKeys))
 		.post(
-			"/users",
+			"/customers",
 			async ({ body, set }) => {
 				set.status = 201;
-				return await adminService.createUser(
+				return await adminService.createCustomer(
 					body.email,
 					body.name,
-					body.customFields,
+					body.metadata,
 				);
 			},
-			{
-				body: AdminCreateUserInputSchema,
-				response: {
-					201: UserResponseSchema,
-					400: ErrorResponseSchema,
-					401: ErrorResponseSchema,
-					409: ErrorResponseSchema,
-					429: ErrorResponseSchema,
-					500: ErrorResponseSchema,
-				},
-				detail: {
-					operationId: "createUser",
-					summary: "Create a license owner",
-					description: "Creates the user that owns one or more license keys.",
-					security: [{ AdminKey: [] }],
-				},
-			},
+			{ body: CustomerInputSchema, response: { 201: CustomerResponseSchema } },
 		)
-		.get("/users", async () => await adminService.listUsers(), {
-			response: {
-				200: t.Array(UserResponseSchema),
-				401: ErrorResponseSchema,
-				429: ErrorResponseSchema,
-				500: ErrorResponseSchema,
-			},
-			detail: {
-				operationId: "listUsers",
-				summary: "List license owners",
-				security: [{ AdminKey: [] }],
-			},
+		.get("/customers", () => adminService.listCustomers(), {
+			response: t.Array(CustomerResponseSchema),
 		})
 		.get(
-			"/users/:id",
-			async ({ params }) => await adminService.getUser(params.id),
+			"/customers/:id",
+			({ params }) => adminService.getCustomer(params.id),
 			{
-				params: t.Object({ id: t.String({ minLength: 1 }) }),
-				response: {
-					200: UserResponseSchema,
-					401: ErrorResponseSchema,
-					404: ErrorResponseSchema,
-					429: ErrorResponseSchema,
-					500: ErrorResponseSchema,
-				},
-				detail: {
-					operationId: "getUser",
-					summary: "Get a license owner",
-					security: [{ AdminKey: [] }],
-				},
+				response: CustomerResponseSchema,
 			},
 		)
 		.patch(
-			"/users/:id",
-			async ({ params, body }) =>
-				await adminService.updateUser(params.id, body),
+			"/customers/:id",
+			({ params, body }) => adminService.updateCustomer(params.id, body),
+			{ body: CustomerPatchSchema, response: CustomerResponseSchema },
+		)
+		.delete("/customers/:id", async ({ params, set }) => {
+			await adminService.deleteCustomer(params.id);
+			set.status = 204;
+		})
+		.post(
+			"/licenses",
+			async ({ body, set }) => {
+				const created = await adminService.createLicense(body);
+				set.status = 201;
+				return presentLicense(created);
+			},
 			{
-				params: t.Object({ id: t.String({ minLength: 1 }) }),
-				body: AdminUpdateUserInputSchema,
-				response: {
-					200: UserResponseSchema,
-					400: ErrorResponseSchema,
-					401: ErrorResponseSchema,
-					404: ErrorResponseSchema,
-					409: ErrorResponseSchema,
-					429: ErrorResponseSchema,
-					500: ErrorResponseSchema,
-				},
-				detail: {
-					operationId: "updateUser",
-					summary: "Update a license owner",
-					security: [{ AdminKey: [] }],
-				},
+				body: LicenseInputSchema,
+				response: { 201: CreatedLicenseResponseSchema },
 			},
 		)
-		.delete(
-			"/users/:id",
-			async ({ params }) => {
-				await adminService.deleteUser(params.id);
-				return { success: true as const };
+		.get(
+			"/licenses",
+			async () => (await adminService.listLicenses()).map(presentLicense),
+			{ response: t.Array(LicenseResponseSchema) },
+		)
+		.get(
+			"/licenses/:id",
+			async ({ params }) =>
+				presentLicense(await adminService.getLicense(params.id)),
+			{ response: LicenseResponseSchema },
+		)
+		.patch(
+			"/licenses/:id",
+			async ({ params, body }) => {
+				const { confirmStripeUnlink, ...fields } = body;
+				return presentLicense(
+					await adminService.updateLicense(params.id, {
+						...fields,
+						...(confirmStripeUnlink ? { unlinkStripe: true } : {}),
+					}),
+				);
 			},
+			{ body: LicensePatchSchema, response: LicenseResponseSchema },
+		)
+		.delete("/licenses/:id", async ({ params, set }) => {
+			await adminService.deleteLicense(params.id);
+			set.status = 204;
+		})
+		.post(
+			"/licenses/:id/actions/renew",
+			async ({ params, body }) =>
+				presentLicense(
+					await adminService.renewSubscription(params.id, body.expiresAt),
+				),
 			{
-				params: t.Object({ id: t.String({ minLength: 1 }) }),
-				response: {
-					200: SuccessResponseSchema,
-					401: ErrorResponseSchema,
-					404: ErrorResponseSchema,
-					429: ErrorResponseSchema,
-					500: ErrorResponseSchema,
-				},
-				detail: {
-					operationId: "deleteUser",
-					summary: "Delete a license owner and their licenses",
-					security: [{ AdminKey: [] }],
-				},
+				body: t.Object(
+					{ expiresAt: t.String({ format: "date-time" }) },
+					{ additionalProperties: false },
+				),
+				response: LicenseResponseSchema,
 			},
 		)
 		.post(
-			"/keys",
-			async ({ body, set }) => {
-				set.status = 201;
-				return await adminService.createKey(body);
-			},
-			{
-				body: AdminCreateKeyInputSchema,
-				response: {
-					201: ApiKeyResponseSchema,
-					400: ErrorResponseSchema,
-					401: ErrorResponseSchema,
-					404: ErrorResponseSchema,
-					429: ErrorResponseSchema,
-					500: ErrorResponseSchema,
-				},
-				detail: {
-					operationId: "createKey",
-					summary: "Create a license key",
-					description:
-						"Creates a key and returns its secret. Store the secret securely.",
-					security: [{ AdminKey: [] }],
-				},
-			},
+			"/licenses/:id/actions/revoke",
+			async ({ params, body }) =>
+				presentLicense(
+					await adminService.revokeLicense(params.id, body.reason),
+				),
+			{ body: RevokeInputSchema, response: LicenseResponseSchema },
 		)
-		.get("/keys", async () => await adminService.listKeys(), {
-			response: {
-				200: t.Array(ApiKeyResponseSchema),
-				401: ErrorResponseSchema,
-				429: ErrorResponseSchema,
-				500: ErrorResponseSchema,
-			},
-			detail: {
-				operationId: "listKeys",
-				summary: "List license keys",
-				description:
-					"Lists license metadata with masked secrets. Full secrets are returned only at creation time.",
-				security: [{ AdminKey: [] }],
-			},
-		})
+		.post(
+			"/licenses/:id/actions/restore",
+			async ({ params }) =>
+				presentLicense(await adminService.restoreLicense(params.id)),
+			{ response: LicenseResponseSchema },
+		)
+		.post(
+			"/licenses/:id/actions/rotate-key",
+			async ({ params }) =>
+				presentLicense(await adminService.rotateLicenseKey(params.id)),
+			{ response: CreatedLicenseResponseSchema },
+		)
+		.post("/licenses/:id/actions/terminate-sessions", async ({ params }) => ({
+			terminated: await adminService.terminateLicenseSessions(params.id),
+		}))
+		.post("/licenses/:id/actions/reset-devices", async ({ params }) => ({
+			removed: await adminService.resetRegisteredDevices(params.id),
+		}))
 		.get(
-			"/keys/:id",
-			async ({ params }) => await adminService.getKey(params.id),
-			{
-				params: t.Object({ id: t.String({ minLength: 1 }) }),
-				response: {
-					200: ApiKeyResponseSchema,
-					401: ErrorResponseSchema,
-					404: ErrorResponseSchema,
-					429: ErrorResponseSchema,
-					500: ErrorResponseSchema,
-				},
-				detail: {
-					operationId: "getKey",
-					summary: "Get a license key",
-					security: [{ AdminKey: [] }],
-				},
-			},
+			"/licenses/:id/access",
+			({ params }) => adminService.getLicenseAccess(params.id),
+			{ response: AccessResponseSchema },
 		)
-		.put(
-			"/keys/:id",
-			async ({ params, body }) => await adminService.updateKey(params.id, body),
-			{
-				params: t.Object({ id: t.String({ minLength: 1 }) }),
-				body: AdminUpdateKeyInputSchema,
-				response: {
-					200: ApiKeyResponseSchema,
-					400: ErrorResponseSchema,
-					401: ErrorResponseSchema,
-					404: ErrorResponseSchema,
-					429: ErrorResponseSchema,
-					500: ErrorResponseSchema,
-				},
-				detail: {
-					operationId: "updateKey",
-					summary: "Update a license key",
-					security: [{ AdminKey: [] }],
-				},
-			},
+		.post(
+			"/licenses/:id/allowlists/ips",
+			({ params, body }) => adminService.allowLicenseIp(params.id, body.ip),
+			{ body: IpAllowlistInputSchema },
 		)
-		.patch(
-			"/keys/:id",
-			async ({ params }) => await adminService.revokeKey(params.id),
-			{
-				params: t.Object({ id: t.String({ minLength: 1 }) }),
-				response: {
-					200: ApiKeyResponseSchema,
-					401: ErrorResponseSchema,
-					404: ErrorResponseSchema,
-					429: ErrorResponseSchema,
-					500: ErrorResponseSchema,
-				},
-				detail: {
-					operationId: "revokeKey",
-					summary: "Revoke a license key",
-					security: [{ AdminKey: [] }],
-				},
-			},
+		.delete("/licenses/:id/allowlists/ips/:ip", ({ params }) =>
+			adminService.removeLicenseAllowedIp(params.id, params.ip),
 		)
+		.post(
+			"/licenses/:id/allowlists/devices",
+			({ params, body }) =>
+				adminService.allowLicenseDevice(params.id, body.deviceId),
+			{ body: DeviceAllowlistInputSchema },
+		)
+		.delete("/licenses/:id/allowlists/devices/:deviceId", ({ params }) =>
+			adminService.removeLicenseAllowedDevice(params.id, params.deviceId),
+		)
+		.delete("/licenses/:id/registrations/ips/:ip", async ({ params }) => ({
+			removed: await adminService.removeRegisteredIp(params.id, params.ip),
+		}))
 		.delete(
-			"/keys/:id",
-			async ({ params }) => {
-				await adminService.deleteKey(params.id);
-				return { success: true as const };
-			},
+			"/licenses/:id/registrations/devices/:deviceId",
+			async ({ params }) => ({
+				removed: await adminService.removeRegisteredDevice(
+					params.id,
+					params.deviceId,
+				),
+			}),
+		)
+		.get(
+			"/licenses/:id/meters",
+			({ params, query }) =>
+				adminService.listLicenseMeters(
+					params.id,
+					String(query.includeArchived ?? "false") === "true",
+				),
+			{ response: t.Array(LicenseMeterResponseSchema) },
+		)
+		.post(
+			"/licenses/:id/meters",
+			({ params, body }) => adminService.createLicenseMeter(params.id, body),
+			{ body: NewMeterInputSchema, response: LicenseMeterResponseSchema },
+		)
+		.post(
+			"/licenses/:id/meters/:name/actions/archive",
+			({ params, body }) =>
+				adminService.archiveLicenseMeter(params.id, params.name, body.reason),
+			{ body: RevokeInputSchema, response: LicenseMeterResponseSchema },
+		)
+		.post(
+			"/licenses/:id/meters/:name/actions/top-up",
+			({ params, body }) =>
+				adminService.topUpLicenseMeter(
+					params.id,
+					params.name,
+					body.units,
+					body.reason,
+				),
+			{ body: MeterTopUpInputSchema, response: LicenseMeterResponseSchema },
+		)
+		.post(
+			"/licenses/:id/meters/:name/actions/adjust",
+			({ params, body }) =>
+				adminService.adjustLicenseMeter(
+					params.id,
+					params.name,
+					body.delta,
+					body.reason,
+				),
 			{
-				params: t.Object({ id: t.String({ minLength: 1 }) }),
-				response: {
-					200: SuccessResponseSchema,
-					401: ErrorResponseSchema,
-					404: ErrorResponseSchema,
-					429: ErrorResponseSchema,
-					500: ErrorResponseSchema,
-				},
-				detail: {
-					operationId: "deleteKey",
-					summary: "Permanently delete a license key",
-					security: [{ AdminKey: [] }],
-				},
+				body: MeterAdjustmentInputSchema,
+				response: LicenseMeterResponseSchema,
 			},
+		)
+		.get(
+			"/licenses/:id/usage-ledger",
+			({ params, query }) =>
+				adminService.listLicenseUsageLedger(
+					params.id,
+					typeof query.meter === "string" ? query.meter : undefined,
+				),
+			{ response: t.Array(UsageLedgerResponseSchema) },
 		);
+
+	if (activity) {
+		app
+			.get("/activity", async ({ query }) =>
+				(
+					await activity.listDetailed(
+						parseActivityQuery(query as Record<string, unknown>),
+					)
+				).map(publicActivity),
+			)
+			.get("/statistics", async ({ query }) => {
+				const statistics = await activity.getStatistics(
+					parseActivityQuery(query as Record<string, unknown>),
+				);
+				return {
+					...statistics,
+					recent: statistics.recent.map(publicActivity),
+				};
+			});
+	}
+
+	if (stripe) {
+		app
+			.get("/licenses/:id/stripe", ({ params }) => stripe.getLink(params.id))
+			.post(
+				"/licenses/:id/actions/link-stripe",
+				async ({ params, body }) =>
+					presentStripeResult(
+						await stripe.linkLicense(params.id, body.subscriptionId),
+					),
+				{ body: StripeLinkInputSchema },
+			)
+			.post(
+				"/licenses/:id/actions/unlink-stripe",
+				({ params }) => stripe.unlinkLicense(params.id),
+				{ body: ConfirmInputSchema },
+			)
+			.post("/licenses/:id/actions/sync-stripe", async ({ params }) =>
+				presentStripeResult(await stripe.syncLicense(params.id)),
+			);
+	}
+
+	return app;
+}

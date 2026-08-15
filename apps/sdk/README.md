@@ -2,18 +2,18 @@
 
 # `keyzori`
 
-**Typed license validation for Bun and Node.js applications.**
+**Typed license activation for Bun and Node.js applications.**
 
-[`Project`](../../README.md) · [`Full SDK reference`](../../docs/sdk-reference.md) · [`Handshake flow`](../../docs/handshake-flow.md)
+[`Project`](../../README.md) | [`Full SDK reference`](../../docs/sdk-reference.md) | [`API reference`](../../docs/api-reference.md)
 
 </div>
 
 ---
 
-The Keyzori SDK manages initial validation, hardware identification, session heartbeats, lifecycle events, and clean logout for desktop and server applications.
+The Keyzori SDK activates a license, manages its device-bound session, sends automatic heartbeats, records named-meter usage, and releases the session cleanly.
 
 > [!NOTE]
-> This is not a browser SDK. Hardware identification relies on operating-system APIs and the license secret must remain in a trusted runtime.
+> This is not a browser SDK. Keep the license secret in a trusted desktop or server runtime. Licensed product users do not need a Keyzori account or dashboard access.
 
 ## Install
 
@@ -21,24 +21,22 @@ The Keyzori SDK manages initial validation, hardware identification, session hea
 bun add keyzori
 ```
 
-Local workspace development is linked automatically by `bun install`.
-
 ## Quick start
 
 ```typescript
-import { LicenseClient } from "keyzori";
+import { LicenseClient, LicenseRequestError } from "keyzori";
 
 const client = new LicenseClient({
-	apiKey: process.env.KEYZORI_LICENSE_KEY ?? "",
+	licenseKey: process.env.KEYZORI_LICENSE_KEY ?? "",
 	serverUrl: "https://licenses.example.com",
-	hardwareId: process.env.APP_MACHINE_ID,
+	deviceId: process.env.KEYZORI_DEVICE_ID,
 	heartbeatIntervalMs: 30_000,
 	maxRetries: 3,
 	requestTimeoutMs: 10_000,
 });
 
-client.events.on("ready", (customFields) => {
-	console.info("License tier", customFields.tier);
+client.events.on("ready", ({ licenseType, metadata }) => {
+	console.info("License ready", licenseType, metadata.tier);
 });
 
 client.events.on("license:revoked", (reason) => {
@@ -46,65 +44,100 @@ client.events.on("license:revoked", (reason) => {
 	process.exit(1);
 });
 
-await client.initialize();
+try {
+	const activation = await client.activate();
+	console.info("Activated", activation.licenseType);
+} catch (error) {
+	if (error instanceof LicenseRequestError) {
+		console.error(error.status, error.code, error.message);
+	}
+	throw error;
+}
 
 process.once("SIGINT", async () => {
-	await client.destroy();
+	await client.deactivate();
 	process.exit(0);
 });
 ```
 
-Attach event listeners before `initialize()` so the initial `ready` event cannot be missed.
+Attach event listeners before `activate()` so the initial `ready` event cannot be missed.
 
-`initialize()` returns the license's client-visible `JsonObject` custom fields. These are separate from administrative customer custom fields, which the server never sends through a handshake. Do not place secrets in either metadata object.
-
-## Lifecycle at a glance
-
-```text
-new client → initialize → validate → active heartbeat loop → destroy → session released
-                             │
-                             └─ rejected / expired / offline → event emitted
-```
+## Public methods
 
 | Method | Behavior |
 | --- | --- |
-| `initialize()` | Validates the license, emits `ready`, and starts heartbeats |
-| `initialize()` while active | Returns the original custom fields without another heartbeat loop |
-| `destroy()` | Stops heartbeats and releases the concurrent session |
-| repeated `destroy()` | Safe; no duplicate cleanup is performed |
+| `activate()` | Starts a session and returns `{ licenseType, metadata }` |
+| repeated `activate()` | Returns the current activation result without starting another session |
+| `consume({ meter, units, eventId })` | Atomically consumes a positive number of named-meter units |
+| `deactivate()` | Stops heartbeats and releases the session; repeated calls share the same result |
 
-Requests have a timeout and heartbeats never overlap.
+`consume()` requires an active session. `eventId` is a per-license idempotency key: retry the same logical action with the same ID. The server returns the original result for an identical retry and rejects conflicting reuse.
 
-The package's only runtime export is `LicenseClient`. Type-only exports include `LicenseClientConfig`, lifecycle event types, key/log-level unions, and the recursive `JsonObject`, `JsonValue`, and `JsonPrimitive` types.
+```typescript
+const usage = await client.consume({
+	meter: "exports",
+	units: 1,
+	eventId: crypto.randomUUID(),
+});
 
-Remote server URLs must use HTTPS; loopback HTTP remains available for local development. Success and error responses are bounded internally. Consumer event-listener exceptions are contained so they cannot interrupt license-state enforcement.
+console.info(`${usage.remaining} export units remain`);
+```
+
+Activation and heartbeats do not consume meter balances. Only explicit `consume()` calls do.
+
+## Session and security behavior
+
+```text
+new client -> activate -> automatic heartbeat loop -> deactivate -> released
+                    |                 |
+                    |                 +-> refreshed type and metadata
+                    +-> consume named-meter usage
+```
+
+The full `licenseKey` is sent only to `POST /v1/activate`. The server-issued `sessionToken` and hashed `deviceId` are used for heartbeat, usage, and deactivation requests. Session tokens are kept inside the client.
+
+Remote server URLs must use HTTPS. Loopback HTTP is allowed for local development. Redirects are refused, requests time out, response bodies are capped at 256 KiB, and success bodies are validated before use. Automatic heartbeats never overlap. The SDK tracks the server-issued session TTL and clamps transient-error and `Retry-After` retries so they are attempted before the current session expires. Repeated throttling is bounded and cannot create a tight retry loop.
+
+If `deviceId` is supplied, its trimmed value is SHA-256 hashed before transmission. When omitted, the SDK derives a stable digest from host operating-system and network-adapter properties. A substantial host or network change can therefore register a new device.
+
+## License types
+
+`LicenseType` is the lowercase union:
+
+```typescript
+type LicenseType = "lifetime" | "subscription" | "metered" | "trial";
+```
+
+Heartbeat results refresh the current `licenseType` and client-visible `metadata`, so operator changes take effect without restarting the product.
 
 ## Events
 
 | Event | When it fires |
 | --- | --- |
-| `ready` | Initial validation succeeded; receives custom fields |
-| `heartbeat:success` | The session TTL was refreshed |
+| `ready` | Initial activation succeeded; receives the activation result |
+| `heartbeat:success` | Session refreshed; receives the latest activation result |
 | `heartbeat:failed` | A retryable HTTP or network failure occurred |
-| `heartbeat:throttled` | A `429` delayed the next heartbeat without adding a failure strike |
-| `license:revoked` | The server rejected the license |
-| `license:expired` | A trial or subscription expired |
-| `session:expired` | The server-issued session is no longer valid |
-| `license:rejected` | Another license policy rejected the runtime |
-| `network:offline` | Consecutive failures reached `maxRetries` |
+| `heartbeat:throttled` | A `429` delayed the next heartbeat without a failure strike |
+| `license:revoked` | The license was revoked |
+| `license:expired` | A subscription or trial expired |
+| `session:expired` | The server-issued session is invalid or expired |
+| `license:rejected` | Another license or meter policy rejected a request |
+| `network:offline` | Consecutive heartbeat failures reached `maxRetries` |
 
-> [!WARNING]
-> Without `hardwareId`, the legacy SHA-256 identifier is derived from host OS and network-adapter properties. Significant hardware or network changes can register a new device. Applications can instead provide a stable, application-specific identifier; only its SHA-256 digest is transmitted.
+Consumer event-listener exceptions are contained so they cannot interrupt license enforcement.
 
-## Build, test, and publish
+## Errors and types
+
+Non-success HTTP responses throw `LicenseRequestError`, which exposes the safe server `message`, HTTP `status`, and optional stable `code`. Network failures and invalid server responses throw standard `Error` instances.
+
+Runtime exports are `LicenseClient` and `LicenseRequestError`. Type exports include request and result types, wire response types, event types, `LicenseType`, `LicenseErrorCode`, `LicenseClientConfig`, and recursive JSON metadata types.
+
+## Build and test
 
 ```powershell
-bun run --cwd apps/sdk build
+bun run --cwd apps/sdk typecheck
 bun run --cwd apps/sdk test
-bun run test:sdk:compiled
-bun run publish:sdk
+bun run --cwd apps/sdk build
 ```
 
-The published package contains compiled ESM JavaScript and TypeScript declarations from `dist/`; source and tests are not shipped. CI also compiles and runs a downstream Bun standalone executable against local test servers.
-
-See the [complete SDK reference](../../docs/sdk-reference.md) for every export, configuration default, method, event, lifecycle guarantee, and error behavior.
+The package ships compiled ESM JavaScript and TypeScript declarations from `dist/`.

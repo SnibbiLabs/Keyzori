@@ -1,105 +1,116 @@
-# Deploying Keyzori
+# Deployment
 
-For local evaluation, the repository's Docker Compose stack starts the server, PostgreSQL, and Redis together. In production, provision PostgreSQL and Redis separately and deploy the standalone server container.
+## Docker Compose
 
-## Local stack
+Copy the example environment, generate independent random secrets, then start the stack:
 
 ```powershell
-$env:ADMIN_API_KEY=(New-Guid).Guid + (New-Guid).Guid
-$env:POSTGRES_PASSWORD=((New-Guid).Guid + (New-Guid).Guid).Replace("-", "")
-docker compose up --build
-docker compose exec server keyzori-admin list-users
+Copy-Item .env.example .env
+docker compose --file dev.docker-compose.yml up --build -d
+docker compose --file dev.docker-compose.yml exec server keyzori admin --help
 ```
 
-Compose fails closed when either secret is unset, persists PostgreSQL in the `postgres-data` volume, runs the application container with reduced privileges, and publishes the local server only on `127.0.0.1:3000`. Keep `POSTGRES_PASSWORD` URL-safe because Compose embeds it in `DATABASE_URL`.
+Set `KEYZORI_POSTGRES_PASSWORD`, `KEYZORI_ADMIN_API_KEY`, and the two dashboard credentials in `.env` before starting. Development Compose builds locally and binds Keyzori to `127.0.0.1:3000`. PostgreSQL and Redis stay on the private network; the application runs as non-root with a read-only filesystem, drops all Linux capabilities, and enables `no-new-privileges`.
 
-The second command runs the bundled CLI inside the server container with its existing `DATABASE_URL`.
+For production, use the published stable image and put a TLS reverse proxy in front of port `3000`:
 
-## Build
+```powershell
+docker compose --file prod.docker-compose.yml pull
+docker compose --file prod.docker-compose.yml up -d
+```
+
+Keep `KEYZORI_DASHBOARD_SECURE_COOKIES=true` behind HTTPS. To operate only through the CLI/admin API, set `KEYZORI_DISABLE_DASHBOARD=true`; the same container remains available but does not mount dashboard routes.
+
+The in-container CLI uses the same PostgreSQL and Redis configuration:
+
+```powershell
+docker compose --file dev.docker-compose.yml exec server keyzori admin customers list
+docker compose --file dev.docker-compose.yml exec server keyzori admin licenses list
+```
+
+## Standalone container
+
+Build and run the hardened server image without Compose:
 
 ```powershell
 bun run docker:build
-```
-
-The image is named `keyzori-license-server`. Its runtime stage contains the compiled server and admin CLI executables, required system libraries, committed Drizzle SQL migrations, and the repository license and notice. Bun and `node_modules` stay in the discarded build stage.
-
-## Run
-
-Provide these required variables:
-
-The admin secret must contain at least 32 characters and must be generated randomly. Optional settings are documented in `apps/server/.env.example`, including request limits, proxy handling, documentation exposure, bind address, and maximum request size.
-
-See the [configuration reference](configuration.md) for every server and CLI setting.
-
-To rotate the admin credential without downtime, deploy the new value as `ADMIN_API_KEY` and temporarily place the previous value in the comma-separated `ADMIN_API_KEYS` setting. Update all administrators, then remove the previous value and redeploy.
-
-- `DATABASE_URL` — reachable PostgreSQL URL
-- `REDIS_URL` — reachable Redis URL
-- `ADMIN_API_KEY` — long unique administrator secret
-
-```powershell
-docker run --name keyzori-license-server `
-  --env-file apps/server/.env `
-  --publish 3000:3000 `
+docker run --name keyzori `
+  --env-file .env `
+  --publish 127.0.0.1:3000:3000 `
+  --read-only `
+  --tmpfs /tmp:rw,noexec,nosuid,size=16m `
+  --cap-drop ALL `
+  --security-opt no-new-privileges:true `
   keyzori-license-server
 ```
 
-Administer the running deployment from its container terminal:
+Invoke `keyzori admin ...` through `docker exec`. The image entrypoint also accepts `serve` and `healthcheck` directly. Ensure `KEYZORI_DATABASE_URL` and `KEYZORI_REDIS_URL` refer to services reachable from inside the container rather than container-local `localhost`.
 
-```powershell
-docker exec keyzori-license-server keyzori-admin list-users
-docker exec keyzori-license-server keyzori-admin create-user --email owner@example.com --name "Owner"
+## External PostgreSQL and Redis
+
+The server image needs only these reachable dependencies:
+
+```text
+KEYZORI_DATABASE_URL=postgresql://...
+KEYZORI_REDIS_URL=rediss://...
 ```
 
-The CLI inherits `DATABASE_URL` from the container and connects directly to PostgreSQL. It does not require the HTTP process to be healthy and does not use `ADMIN_API_KEY`.
+Use encrypted connections where the providers support them, restrict network access to the Keyzori workload, and back up PostgreSQL. Redis holds replaceable runtime sessions and dashboard login state, but production Redis should still use authentication, persistence appropriate to your recovery target, and eviction monitoring.
 
-The container applies pending migrations before accepting traffic. The image health check calls `/ready`.
+## Reverse proxy
 
-Use `/health` as a liveness probe and `/ready` as a readiness probe. The readiness endpoint verifies PostgreSQL and Redis connectivity and returns HTTP 503 when either dependency is unavailable.
+Forward HTTP and long-lived SSE responses without buffering. Preserve the original host and scheme. Trust forwarded client IPs only when direct server access is blocked and `KEYZORI_TRUSTED_PROXY_CIDRS` lists the immediate proxy networks.
 
-For local services running on Docker Desktop’s host, use `host.docker.internal` rather than `localhost` in database and Redis URLs. In production, use private network service addresses.
+Route the chosen hostname to port `3000`. The same listener serves `/v1/*`, `/admin/*`, `/webhooks/stripe`, `/health`, `/ready`, `/docs`, and—when enabled—`/` plus `/dashboard/*`. Use access controls around the operator routes as appropriate for the deployment.
 
-## Standalone dashboard
+## Stripe
 
-The optional dashboard is deployed separately from the server and performs every data operation through the authenticated admin HTTP API. It does not need database or Redis access.
+Set both Stripe variables or neither. After deployment, create a Stripe webhook endpoint for:
 
-```powershell
-Copy-Item apps/dash/.env.example apps/dash/.env
-# Configure KEYZORI_SERVER_URL, KEYZORI_AUTH_PASS, and KEYZORI_ADMIN_KEY.
-bun install --frozen-lockfile
-bun run dash
+```text
+https://licenses.example.com/webhooks/stripe
 ```
 
-For a container deployment:
+Subscribe to customer subscription and invoice lifecycle events. Keyzori verifies the untouched request body, stores event IDs for deduplication, processes asynchronously, and retrieves current subscription state before changing access. It never cancels or modifies the Stripe subscription.
+
+## Health and startup
+
+- `/health` proves the HTTP process is alive.
+- `/ready` returns success only when PostgreSQL and Redis respond.
+- container health runs `keyzori healthcheck` against `/ready`.
+- `keyzori serve` applies committed migrations before listening.
+
+Use rolling deployment rules that do not send traffic until readiness succeeds. A type change, revoke, or rotation takes effect on the next runtime request; revoked or rotated licenses also have active sessions terminated.
+
+## Image contents
+
+The multi-stage build uses version-tagged Bun and distroless base images, a frozen lockfile, and a BuildKit dependency cache. The final image contains only:
+
+- the single compiled `keyzori` executable;
+- committed SQL migrations;
+- `LICENSE` and `NOTICE`.
+
+The dashboard is embedded in the same executable and image. `KEYZORI_DISABLE_DASHBOARD=true` changes route mounting, not image selection.
+
+Every release publishes `ghcr.io/snibbilabs/keyzori:v<version>`. Stable releases also update `ghcr.io/snibbilabs/keyzori:latest`; prereleases do not. Every successful commit on `main` updates `ghcr.io/snibbilabs/keyzori:canary`.
+
+### Publish a version
+
+Set the same numeric SemVer version in the root, server, and SDK `package.json` files, then commit it to `main`. The Git tag adds the required `v` prefix:
 
 ```powershell
-docker build --file apps/dash/Dockerfile --tag keyzori-dashboard .
-docker run --env-file apps/dash/.env --publish 3100:3100 keyzori-dashboard
+$releaseTag = "v1.1.0"
+git tag -a $releaseTag -m $releaseTag
+git push origin main
+git push origin $releaseTag
 ```
 
-Terminate TLS in front of the dashboard, keep secure cookies enabled, and restrict network access to operators. The browser receives only an opaque session cookie; `KEYZORI_ADMIN_KEY` remains in the dashboard process. A restart clears all in-memory dashboard sessions.
+Pushing the tag starts the Release workflow. It rejects tags that do not exactly match the package version or whose commit is not on `main`. The workflow creates a GitHub Release with automatically generated notes from the commits and merged pull requests since the previous release; it does not create new commits. A stable tag such as `v1.1.0` publishes `:v1.1.0` and moves `:latest`; a prerelease such as `v1.1.0-rc.1` publishes only its exact version tag. Neither release type changes `:canary`.
 
-## Secure deployment guidance
+To republish or repair an existing tag, open **Actions → Release → Run workflow** and enter the existing `v`-prefixed tag. The tag must already exist in the repository.
 
-- Terminate TLS at a trusted reverse proxy or platform load balancer.
-- Keep PostgreSQL and Redis off the public internet.
-- Back up PostgreSQL before deploying schema changes.
-- Set `TRUST_PROXY_HEADERS=true` only when direct access is blocked, set `TRUSTED_PROXY_CIDRS` to every trusted hop, and choose `TRUSTED_PROXY_HEADER`. Use `cf-connecting-ip` only behind Cloudflare.
-- Restrict `/admin/*` at the network layer when possible.
-- Store newly created license secrets immediately; the server hashes them at rest and cannot display them again.
-- Before shipping an SDK update, run `bun run test:sdk:compiled`; CI and release workflows execute the same downstream Bun executable gate on Ubuntu.
-- Pull the published server image as `ghcr.io/lilsnibbi/keyzori:<commit-sha>` for an immutable build, or use its release tag (for example, `v1.0.0`). Pin production deployments to a commit-SHA tag or digest.
-- Send `SIGTERM` during deployments and allow in-flight requests to finish before enforcing a kill timeout.
-- Monitor `/ready`, HTTP error rates, rate-limit responses, PostgreSQL, Redis, and process restarts.
+CI and release builds compare the image against the published dual-binary `v0.2.1-test.2` baseline and fail unless the unified image is at least 35% smaller. Every run reports both sizes and the reduction in the workflow summary.
 
-## Non-container deployment
+## Native binary
 
-Build on the same operating system and CPU architecture as the destination:
-
-```powershell
-bun run build:server
-```
-
-Deploy the generated `apps/server/dist/` folder, which contains both executables, the migrations, and the required license and notice. The destination does not need Bun or `node_modules`. Run `keyzori-server` as the service and invoke `keyzori-admin` for local administration. Set `DRIZZLE_MIGRATIONS_PATH` only if migrations are moved away from the server executable.
-
-Startup applies pending migrations automatically.
+`bun run build:server` creates `apps/server/dist/keyzori` (or `keyzori.exe` on Windows), committed migrations, and legal notices. Deploy the entire `dist` directory on the same operating system and CPU architecture used for the build, then run `keyzori serve`.

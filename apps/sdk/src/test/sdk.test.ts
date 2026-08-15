@@ -1,14 +1,43 @@
+import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, mock } from "bun:test";
 import { EventBroker } from "../core/EventBroker";
 import { NetworkClient } from "../core/NetworkClient";
 import * as publicApi from "../index";
-import { LicenseClient } from "../index";
-import type { JsonObject, JsonValue } from "../index";
+import { LicenseClient, LicenseRequestError } from "../index";
+import type {
+	ActivationResult,
+	JsonObject,
+	JsonValue,
+	LicenseType,
+	UsageResult,
+} from "../index";
 
-describe("SDK Client Core", () => {
+const SESSION_TOKEN = "11111111-1111-4111-8111-111111111111";
+const ROTATED_SESSION_TOKEN = "22222222-2222-4222-8222-222222222222";
+
+function activationResponse(
+	overrides: Partial<{
+		licenseType: LicenseType;
+		metadata: JsonObject;
+		sessionToken: string;
+		sessionTtlSeconds: number;
+	}> = {},
+): Response {
+	return Response.json({
+		success: true,
+		licenseType: "lifetime",
+		metadata: {},
+		sessionToken: SESSION_TOKEN,
+		sessionTtlSeconds: 45,
+		...overrides,
+	});
+}
+
+describe("Keyzori SDK", () => {
 	let originalFetch: typeof global.fetch;
 	let originalConsoleError: typeof console.error;
 	let originalConsoleWarn: typeof console.warn;
+	let clients: LicenseClient[];
 
 	beforeEach(() => {
 		originalFetch = global.fetch;
@@ -16,142 +45,272 @@ describe("SDK Client Core", () => {
 		originalConsoleWarn = console.warn;
 		console.error = mock(() => {}) as unknown as typeof console.error;
 		console.warn = mock(() => {}) as unknown as typeof console.warn;
+		clients = [];
 	});
 
-	afterEach(() => {
+	afterEach(async () => {
+		await Promise.allSettled(clients.map((client) => client.deactivate()));
 		global.fetch = originalFetch;
 		console.error = originalConsoleError;
 		console.warn = originalConsoleWarn;
 	});
 
-	it("exports only LicenseClient at runtime", () => {
-		expect(Object.keys(publicApi)).toEqual(["LicenseClient"]);
-	});
-
-	it("exports recursive JSON custom-field types without adding runtime exports", () => {
-		const nested: JsonValue = ["export", true, 3, null, { region: "au" }];
-		const fields: JsonObject = { features: nested };
-		expect(fields).toEqual({
-			features: ["export", true, 3, null, { region: "au" }],
-		});
-	});
-
-	it("initializes successfully and emits ready", async () => {
-		global.fetch = mock(async (url: string | URL | Request) => {
-			if (url.toString().includes("/v1/handshake")) {
-				return new Response(
-					JSON.stringify({
-						success: true,
-						type: "PERPETUAL",
-						customFields: { tier: "premium" },
-						sessionToken: "11111111-1111-4111-8111-111111111111",
-					}),
-					{ status: 200 },
-				);
-			}
-			return new Response("Not Found", { status: 404 });
-		}) as unknown as typeof fetch;
-
+	function createClient(
+		overrides: Partial<ConstructorParameters<typeof LicenseClient>[0]> = {},
+	): LicenseClient {
 		const client = new LicenseClient({
-			apiKey: "test_key",
-			serverUrl: "http://localhost:3000",
-		});
-
-		let readyCalled = false;
-		client.events.on("ready", (fields) => {
-			expect(fields).toEqual({ tier: "premium" });
-			readyCalled = true;
-		});
-
-		const data = await client.initialize();
-		const secondData = await client.initialize();
-		expect(data).toEqual({ tier: "premium" });
-		expect(secondData).toEqual(data);
-		expect(global.fetch).toHaveBeenCalled();
-		expect(global.fetch).toHaveBeenCalledTimes(1);
-		expect(readyCalled).toBe(true);
-
-		await client.destroy();
-	});
-
-	it("rejects cleartext remote URLs in the internal network client", () => {
-		expect(
-			() => new NetworkClient("http://licenses.example.com", "test_key"),
-		).toThrow("serverUrl must use HTTPS");
-		expect(
-			() => new NetworkClient("https://licenses.example.com", "test_key"),
-		).not.toThrow();
-		expect(
-			() => new NetworkClient("http://localhost:3000", "test_key"),
-		).not.toThrow();
-	});
-
-	it("rejects invalid configuration before making requests", () => {
-		expect(
-			() =>
-				new LicenseClient({
-					apiKey: "",
-					serverUrl: "not-a-url",
-				}),
-		).toThrow("apiKey is required");
-		expect(
-			() =>
-				new LicenseClient({
-					apiKey: "key",
-					serverUrl: "ftp://example.com",
-				}),
-		).toThrow("serverUrl must use HTTPS");
-		expect(
-			() =>
-				new LicenseClient({
-					apiKey: "key",
-					serverUrl: "http://licenses.example.com",
-				}),
-		).toThrow("serverUrl must use HTTPS");
-		expect(
-			() =>
-				new LicenseClient({
-					apiKey: "key",
-					serverUrl: "https://licenses.example.com",
-					hardwareId: " ",
-				}),
-		).toThrow("hardwareId must contain between 1 and 1024");
-	});
-
-	it("hashes an explicit hardware ID before transmitting it", async () => {
-		let sentHwid: unknown;
-		global.fetch = mock(async (_url, init) => {
-			sentHwid = JSON.parse(String(init?.body)).hwid;
-			return Response.json({
-				success: true,
-				type: "PERPETUAL",
-				customFields: {},
-				sessionToken: "11111111-1111-4111-8111-111111111111",
-				sessionTtlSeconds: 45,
-			});
-		}) as unknown as typeof fetch;
-		const client = new LicenseClient({
-			apiKey: "key",
+			licenseKey: "lic_test",
 			serverUrl: "https://licenses.example.com",
-			hardwareId: " application-machine-id ",
+			...overrides,
 		});
-		await client.initialize();
-		expect(sentHwid).toBe(
-			new Bun.CryptoHasher("sha256")
-				.update("application-machine-id")
-				.digest("hex"),
-		);
-		await client.destroy();
+		clients.push(client);
+		return client;
+	}
+
+	it("exports only the two public runtime classes", () => {
+		expect(Object.keys(publicApi).sort()).toEqual([
+			"LicenseClient",
+			"LicenseRequestError",
+		]);
 	});
 
-	it("refuses 307 and 308 redirects without contacting the target", async () => {
+	it("exports canonical license, result, and recursive JSON types", () => {
+		const licenseTypes: LicenseType[] = [
+			"lifetime",
+			"subscription",
+			"metered",
+			"trial",
+		];
+		const nested: JsonValue = ["export", true, 3, null, { region: "au" }];
+		const activation: ActivationResult = {
+			licenseType: licenseTypes[0] as LicenseType,
+			metadata: { features: nested },
+		};
+		const usage: UsageResult = {
+			meter: "exports",
+			units: 2,
+			eventId: "evt_1",
+			remaining: 8,
+		};
+		expect({ activation, usage }).toEqual({
+			activation: {
+				licenseType: "lifetime",
+				metadata: {
+					features: ["export", true, 3, null, { region: "au" }],
+				},
+			},
+			usage,
+		});
+	});
+
+	it("activates once, hashes deviceId, and never sends the key again", async () => {
+		const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
+		global.fetch = mock(async (input, init) => {
+			const path = new URL(input.toString()).pathname;
+			const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+			requests.push({ path, body });
+			if (path === "/v1/activate") {
+				return activationResponse({
+					licenseType: "subscription",
+					metadata: { tier: "premium" },
+				});
+			}
+			return Response.json({ success: true });
+		}) as unknown as typeof fetch;
+
+		const client = createClient({
+			licenseKey: " lic_secret ",
+			deviceId: " application-device-id ",
+		});
+		let ready: ActivationResult | undefined;
+		client.events.on("ready", (result) => {
+			ready = result;
+		});
+
+		const first = await client.activate();
+		const second = await client.activate();
+		expect(first).toEqual({
+			licenseType: "subscription",
+			metadata: { tier: "premium" },
+		});
+		expect(second).toEqual(first);
+		expect(ready).toEqual(first);
+		expect(requests).toHaveLength(1);
+		expect(requests[0]).toEqual({
+			path: "/v1/activate",
+			body: {
+				licenseKey: "lic_secret",
+				deviceId: createHash("sha256")
+					.update("application-device-id")
+					.digest("hex"),
+			},
+		});
+
+		await client.deactivate();
+		expect(requests[1]?.path).toBe("/v1/deactivate");
+		expect(requests[1]?.body).toEqual({
+			sessionToken: SESSION_TOKEN,
+			deviceId: requests[0]?.body.deviceId,
+		});
+		expect(requests[1]?.body).not.toHaveProperty("licenseKey");
+	});
+
+	it("heartbeats with the session token and applies refreshed license data", async () => {
+		const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
+		global.fetch = mock(async (input, init) => {
+			const path = new URL(input.toString()).pathname;
+			const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+			requests.push({ path, body });
+			if (path === "/v1/activate") return activationResponse();
+			if (path === "/v1/heartbeat") {
+				return activationResponse({
+					licenseType: "trial",
+					metadata: { feature: "updated" },
+					sessionToken: ROTATED_SESSION_TOKEN,
+				});
+			}
+			return Response.json({ success: true });
+		}) as unknown as typeof fetch;
+		const client = createClient({
+			deviceId: "device",
+			heartbeatIntervalMs: 1,
+		});
+		const heartbeat = new Promise<ActivationResult>((resolve) => {
+			client.events.once("heartbeat:success", resolve);
+		});
+		await client.activate();
+		const refreshed = await Promise.race([
+			heartbeat,
+			Bun.sleep(500).then(() => {
+				throw new Error("Heartbeat did not run");
+			}),
+		]);
+		expect(refreshed).toEqual({
+			licenseType: "trial",
+			metadata: { feature: "updated" },
+		});
+		const heartbeatRequest = requests.find(
+			(request) => request.path === "/v1/heartbeat",
+		);
+		expect(heartbeatRequest?.body).toEqual({
+			sessionToken: SESSION_TOKEN,
+			deviceId: expect.any(String),
+		});
+		expect(heartbeatRequest?.body).not.toHaveProperty("licenseKey");
+
+		await client.deactivate();
+		const deactivation = requests.find(
+			(request) => request.path === "/v1/deactivate",
+		);
+		expect(deactivation?.body.sessionToken).toBe(ROTATED_SESSION_TOKEN);
+	});
+
+	it("consumes named-meter units with an idempotency event", async () => {
+		const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
+		global.fetch = mock(async (input, init) => {
+			const path = new URL(input.toString()).pathname;
+			const body = JSON.parse(String(init?.body)) as Record<string, unknown>;
+			requests.push({ path, body });
+			if (path === "/v1/activate") {
+				return activationResponse({ licenseType: "metered" });
+			}
+			if (path === "/v1/usage") {
+				return Response.json({ success: true, ...body, remaining: 7 });
+			}
+			return Response.json({ success: true });
+		}) as unknown as typeof fetch;
+		const client = createClient({ deviceId: "device" });
+		await client.activate();
+
+		await expect(
+			client.consume({ meter: " exports ", units: 3, eventId: " evt_1 " }),
+		).resolves.toEqual({
+			meter: "exports",
+			units: 3,
+			eventId: "evt_1",
+			remaining: 7,
+		});
+		const usage = requests.find((request) => request.path === "/v1/usage");
+		expect(usage?.body).toEqual({
+			sessionToken: SESSION_TOKEN,
+			deviceId: expect.any(String),
+			meter: "exports",
+			units: 3,
+			eventId: "evt_1",
+		});
+		expect(usage?.body).not.toHaveProperty("licenseKey");
+	});
+
+	it("rejects invalid configuration and legacy field names", () => {
+		expect(
+			() =>
+				new LicenseClient({
+					apiKey: "old-name",
+					serverUrl: "https://licenses.example.com",
+				} as never),
+		).toThrow("LicenseClient configuration contains unknown fields");
+		expect(
+			() =>
+				new LicenseClient({
+					licenseKey: " ",
+					serverUrl: "https://licenses.example.com",
+				}),
+		).toThrow("licenseKey must contain between 1 and 128");
+		expect(
+			() =>
+				new LicenseClient({
+					licenseKey: "lic_test",
+					serverUrl: "https://licenses.example.com",
+					deviceId: " ",
+				}),
+		).toThrow("deviceId must contain between 1 and 1024");
+		expect(
+			() =>
+				new LicenseClient({
+					licenseKey: "lic_test",
+					serverUrl: "https://licenses.example.com",
+					heartbeatIntervalMs: 0,
+				}),
+		).toThrow("heartbeatIntervalMs must be a positive safe integer");
+		expect(
+			() =>
+				new LicenseClient({
+					licenseKey: "lic_test",
+					serverUrl: "https://licenses.example.com",
+					logLevel: "verbose",
+				} as never),
+		).toThrow("logLevel must be none, error, warn, info, or debug");
+	});
+
+	it("allows only HTTPS or loopback HTTP server URLs", () => {
+		expect(
+			() => new NetworkClient("http://licenses.example.com", "lic_test"),
+		).toThrow("serverUrl must use HTTPS");
+		expect(
+			() => new NetworkClient("https://user:pass@example.com", "lic_test"),
+		).toThrow("serverUrl must use HTTPS");
+		expect(
+			() => new NetworkClient("https://example.com?token=secret", "lic_test"),
+		).toThrow("serverUrl must use HTTPS");
+		expect(
+			() => new NetworkClient("https://licenses.example.com", "lic_test"),
+		).not.toThrow();
+		expect(
+			() => new NetworkClient("http://localhost:3000", "lic_test"),
+		).not.toThrow();
+		expect(
+			() => new NetworkClient("http://[::1]:3000", "lic_test"),
+		).not.toThrow();
+	});
+
+	it("refuses redirects without contacting the target", async () => {
 		for (const status of [307, 308]) {
 			let targetRequests = 0;
 			const target = Bun.serve({
 				port: 0,
 				fetch() {
 					targetRequests++;
-					return Response.json({ success: true });
+					return activationResponse();
 				},
 			});
 			const origin = Bun.serve({
@@ -164,8 +323,8 @@ describe("SDK Client Core", () => {
 				},
 			});
 			try {
-				const network = new NetworkClient(origin.url.toString(), "credential");
-				await expect(network.sendHandshake("hwid")).rejects.toThrow();
+				const network = new NetworkClient(origin.url.toString(), "lic_secret");
+				await expect(network.sendActivate("device")).rejects.toThrow();
 				expect(targetRequests).toBe(0);
 			} finally {
 				origin.stop(true);
@@ -174,67 +333,287 @@ describe("SDK Client Core", () => {
 		}
 	});
 
-	it("bounds response bodies before parsing them", async () => {
-		global.fetch = mock(
-			async () =>
-				new Response(
-					JSON.stringify({
-						success: true,
-						type: "PERPETUAL",
-						customFields: { payload: "x".repeat(262_144) },
-						sessionToken: "11111111-1111-4111-8111-111111111111",
+	it("bounds response bodies before parsing success or error payloads", async () => {
+		for (const status of [200, 403]) {
+			global.fetch = mock(
+				async () =>
+					new Response(JSON.stringify({ error: "x".repeat(262_144) }), {
+						status,
 					}),
-					{ status: 200 },
-				),
-		) as unknown as typeof fetch;
-		const client = new LicenseClient({
-			apiKey: "test-key",
-			serverUrl: "https://licenses.example.com",
-		});
-		expect(client.initialize()).rejects.toThrow(
-			"response exceeded the safety limit",
-		);
+			) as unknown as typeof fetch;
+			const client = createClient();
+			await expect(client.activate()).rejects.toThrow(
+				"response exceeded the safety limit",
+			);
+		}
 	});
 
-	it("contains listener failures so lifecycle enforcement continues", async () => {
-		let handshakeCount = 0;
-		let logoutCount = 0;
-		global.fetch = mock(async (url: string | URL | Request) => {
-			if (url.toString().includes("/v1/logout")) {
-				logoutCount++;
-				return new Response(JSON.stringify({ success: true }));
+	it("rejects malformed activation responses", async () => {
+		for (const payload of [
+			{ success: true },
+			{
+				success: true,
+				licenseType: "PERPETUAL",
+				metadata: {},
+				sessionToken: SESSION_TOKEN,
+				sessionTtlSeconds: 45,
+			},
+			{
+				success: true,
+				licenseType: "lifetime",
+				metadata: [],
+				sessionToken: SESSION_TOKEN,
+				sessionTtlSeconds: 45,
+			},
+			{
+				success: true,
+				licenseType: "lifetime",
+				metadata: {},
+				sessionToken: "short",
+				sessionTtlSeconds: 45,
+			},
+			{
+				success: true,
+				licenseType: "lifetime",
+				metadata: {},
+				sessionToken: SESSION_TOKEN,
+				sessionTtlSeconds: 0,
+			},
+		]) {
+			global.fetch = mock(async () =>
+				Response.json(payload),
+			) as unknown as typeof fetch;
+			const client = createClient();
+			await expect(client.activate()).rejects.toThrow(
+				"invalid activation response",
+			);
+		}
+	});
+
+	it("throws structured request errors and emits precise activation events", async () => {
+		for (const scenario of [
+			{ code: "LICENSE_EXPIRED", event: "license:expired" as const },
+			{ code: "LICENSE_REVOKED", event: "license:revoked" as const },
+			{ code: "LICENSE_INVALID", event: "license:rejected" as const },
+			{ code: "DEVICE_NOT_ALLOWED", event: "license:rejected" as const },
+		]) {
+			global.fetch = mock(async () =>
+				Response.json(
+					{ error: "Blocked", code: scenario.code },
+					{ status: 403 },
+				),
+			) as unknown as typeof fetch;
+			const client = createClient();
+			let reason: string | undefined;
+			client.events.once(scenario.event, (value) => {
+				reason = value;
+			});
+			try {
+				await client.activate();
+				throw new Error("Expected activation to fail");
+			} catch (error) {
+				expect(error).toBeInstanceOf(LicenseRequestError);
+				expect((error as LicenseRequestError).status).toBe(403);
+				expect((error as LicenseRequestError).code).toBe(scenario.code);
 			}
-			handshakeCount++;
-			if (handshakeCount === 1) {
-				return new Response(
-					JSON.stringify({
-						success: true,
-						type: "PERPETUAL",
-						customFields: {},
-						sessionToken: "11111111-1111-4111-8111-111111111111",
-					}),
+			expect(reason).toBe("Blocked");
+		}
+	});
+
+	it("keeps meter rejections recoverable", async () => {
+		let usageCalls = 0;
+		global.fetch = mock(async (input, init) => {
+			const path = new URL(input.toString()).pathname;
+			if (path === "/v1/activate") {
+				return activationResponse({ licenseType: "metered" });
+			}
+			if (path === "/v1/usage") {
+				usageCalls++;
+				if (usageCalls === 1) {
+					return Response.json(
+						{ error: "Meter exhausted", code: "METER_EXHAUSTED" },
+						{ status: 409 },
+					);
+				}
+				const body = JSON.parse(String(init?.body));
+				return Response.json({ success: true, ...body, remaining: 0 });
+			}
+			return Response.json({ success: true });
+		}) as unknown as typeof fetch;
+		const client = createClient();
+		await client.activate();
+		let rejection: string | undefined;
+		client.events.once("license:rejected", (reason) => {
+			rejection = reason;
+		});
+
+		await expect(
+			client.consume({ meter: "exports", units: 1, eventId: "evt_1" }),
+		).rejects.toMatchObject({
+			name: "LicenseRequestError",
+			status: 409,
+			code: "METER_EXHAUSTED",
+		});
+		expect(rejection).toBe("Meter exhausted");
+		await expect(
+			client.consume({ meter: "exports", units: 1, eventId: "evt_2" }),
+		).resolves.toMatchObject({ eventId: "evt_2", remaining: 0 });
+	});
+
+	it("validates usage inputs locally", async () => {
+		global.fetch = mock(async (input) => {
+			if (new URL(input.toString()).pathname === "/v1/activate") {
+				return activationResponse({ licenseType: "metered" });
+			}
+			return Response.json({ success: true });
+		}) as unknown as typeof fetch;
+		const client = createClient();
+		await expect(
+			client.consume({ meter: "exports", units: 1, eventId: "evt" }),
+		).rejects.toThrow("call activate() first");
+		await client.activate();
+		await expect(
+			client.consume({ meter: " ", units: 1, eventId: "evt" }),
+		).rejects.toThrow("meter must contain between 1 and 128");
+		await expect(
+			client.consume({ meter: "exports", units: 0, eventId: "evt" }),
+		).rejects.toThrow("units must be a positive safe integer");
+		await expect(
+			client.consume({
+				meter: "credits",
+				units: 2_147_483_648,
+				eventId: "evt-too-large",
+			}),
+		).rejects.toThrow("no greater than 2147483647");
+		await expect(
+			client.consume({ meter: "exports", units: 1, eventId: " " }),
+		).rejects.toThrow("eventId must contain between 1 and 128");
+	});
+
+	it("rejects mismatched or malformed usage responses", async () => {
+		let usageResponse: Record<string, unknown> = {
+			success: true,
+			meter: "other",
+			units: 1,
+			eventId: "evt",
+			remaining: 9,
+		};
+		global.fetch = mock(async (input) => {
+			const path = new URL(input.toString()).pathname;
+			if (path === "/v1/activate") return activationResponse();
+			if (path === "/v1/usage") return Response.json(usageResponse);
+			return Response.json({ success: true });
+		}) as unknown as typeof fetch;
+		const client = createClient();
+		await client.activate();
+		await expect(
+			client.consume({ meter: "exports", units: 1, eventId: "evt" }),
+		).rejects.toThrow("mismatched usage response");
+
+		usageResponse = {
+			success: true,
+			meter: "exports",
+			units: 1,
+			eventId: "evt",
+			remaining: -1,
+		};
+		await expect(
+			client.consume({ meter: "exports", units: 1, eventId: "evt" }),
+		).rejects.toThrow("invalid usage response");
+	});
+
+	it("contains listener failures while enforcing heartbeat failure limits", async () => {
+		let heartbeatCalls = 0;
+		let deactivationCalls = 0;
+		global.fetch = mock(async (input) => {
+			const path = new URL(input.toString()).pathname;
+			if (path === "/v1/activate") return activationResponse();
+			if (path === "/v1/heartbeat") {
+				heartbeatCalls++;
+				return Response.json(
+					{ error: "Temporary failure", code: "INTERNAL_ERROR" },
+					{ status: 503 },
 				);
 			}
-			return new Response(JSON.stringify({ error: "temporary" }), {
-				status: 500,
-			});
+			deactivationCalls++;
+			return Response.json({ success: true });
 		}) as unknown as typeof fetch;
-
-		const client = new LicenseClient({
-			apiKey: "test-key",
-			serverUrl: "https://licenses.example.com",
-			heartbeatIntervalMs: 1,
-			maxRetries: 1,
-		});
+		const client = createClient({ heartbeatIntervalMs: 1, maxRetries: 1 });
 		client.events.on("heartbeat:failed", () => {
 			throw new Error("consumer failure");
 		});
-		client.events.on("network:offline", () => {
-			throw new Error("consumer failure");
+		const offline = new Promise<void>((resolve) => {
+			client.events.once("network:offline", () => {
+				resolve();
+				throw new Error("consumer failure");
+			});
 		});
-		await client.initialize();
-		await Bun.sleep(20);
-		expect(logoutCount).toBe(1);
+		await client.activate();
+		await Promise.race([
+			offline,
+			Bun.sleep(500).then(() => {
+				throw new Error("Offline event did not run");
+			}),
+		]);
+		await Bun.sleep(10);
+		expect(heartbeatCalls).toBe(1);
+		expect(deactivationCalls).toBe(1);
+	});
+
+	it("retries network and 5xx heartbeat failures before the session TTL", async () => {
+		for (const failureMode of ["network", "5xx"] as const) {
+			let heartbeatCalls = 0;
+			let sessionExpiresAtMs = 0;
+			global.fetch = mock(async (input) => {
+				const path = new URL(input.toString()).pathname;
+				if (path === "/v1/activate") {
+					sessionExpiresAtMs = Date.now() + 1_000;
+					return activationResponse({ sessionTtlSeconds: 1 });
+				}
+				if (path === "/v1/heartbeat") {
+					heartbeatCalls++;
+					if (heartbeatCalls === 1) {
+						if (failureMode === "network") throw new TypeError("offline");
+						return Response.json(
+							{ error: "Temporary failure", code: "INTERNAL_ERROR" },
+							{ status: 503 },
+						);
+					}
+					if (Date.now() >= sessionExpiresAtMs) {
+						return Response.json(
+							{
+								error: "Session expired",
+								code: "SESSION_INVALID_OR_EXPIRED",
+							},
+							{ status: 403 },
+						);
+					}
+					return activationResponse({ sessionTtlSeconds: 1 });
+				}
+				return Response.json({ success: true });
+			}) as unknown as typeof fetch;
+			const client = createClient({
+				heartbeatIntervalMs: 1_000,
+				maxRetries: 2,
+				requestTimeoutMs: 1,
+			});
+			const recovered = new Promise<ActivationResult>((resolve) => {
+				client.events.once("heartbeat:success", resolve);
+			});
+
+			await client.activate();
+			await Promise.race([
+				recovered,
+				Bun.sleep(1_500).then(() => {
+					throw new Error(
+						`${failureMode} heartbeat did not recover before TTL`,
+					);
+				}),
+			]);
+			expect(heartbeatCalls).toBe(2);
+			expect(Date.now()).toBeLessThan(sessionExpiresAtMs);
+			await client.deactivate();
+		}
 	});
 
 	it("preserves once semantics while containing listener exceptions", () => {
@@ -245,266 +624,178 @@ describe("SDK Client Core", () => {
 			calls++;
 			throw new Error("listener failed");
 		});
-		broker.emit("heartbeat:success");
-		broker.emit("heartbeat:success");
+		const result: ActivationResult = { licenseType: "lifetime", metadata: {} };
+		broker.emit("heartbeat:success", result);
+		broker.emit("heartbeat:success", result);
 		expect(calls).toBe(1);
 		expect(listenerErrors).toHaveLength(1);
-
-		let removedCalls = 0;
-		const removedListener = () => {
-			removedCalls++;
-		};
-		broker.on("heartbeat:success", removedListener);
-		broker.removeListener("heartbeat:success", removedListener);
-		broker.emit("heartbeat:success");
-		expect(removedCalls).toBe(0);
 	});
 
-	it("rejects malformed success responses", async () => {
-		global.fetch = mock(
-			async () =>
-				new Response(JSON.stringify({ success: true }), { status: 200 }),
-		) as unknown as typeof fetch;
-		const client = new LicenseClient({
-			apiKey: "test-key",
-			serverUrl: "http://localhost:3000",
-		});
-		expect(client.initialize()).rejects.toThrow(
-			"License server returned an invalid handshake response",
-		);
-	});
-
-	it("rejects invalid advertised session TTLs", async () => {
-		global.fetch = mock(async () =>
-			Response.json({
-				success: true,
-				type: "PERPETUAL",
-				customFields: {},
-				sessionToken: "11111111-1111-4111-8111-111111111111",
-				sessionTtlSeconds: 0,
-			}),
-		) as unknown as typeof fetch;
-		const client = new LicenseClient({
-			apiKey: "test-key",
-			serverUrl: "https://licenses.example.com",
-		});
-		expect(client.initialize()).rejects.toThrow("invalid session TTL");
-	});
-
-	it("maps structured and legacy runtime rejections to precise events", async () => {
-		for (const scenario of [
-			{
-				payload: {
-					error: "Subscription expired",
-					code: "SUBSCRIPTION_EXPIRED",
-				},
-				event: "license:expired" as const,
-			},
-			{
-				payload: {
-					error: "Concurrent session limit",
-					code: "CONCURRENT_SESSION_LIMIT",
-				},
-				event: "license:rejected" as const,
-			},
-			{
-				payload: {
-					error: "Invalid or revoked API key",
-					code: "LICENSE_INVALID_OR_REVOKED",
-				},
-				event: "license:revoked" as const,
-			},
-			{
-				payload: {
-					error: "Invalid or expired session token",
-					code: "SESSION_INVALID_OR_EXPIRED",
-				},
-				event: "session:expired" as const,
-			},
-			{
-				payload: { error: "Invalid or expired session token" },
-				event: "session:expired" as const,
-			},
-		]) {
-			let handshakes = 0;
-			global.fetch = mock(async (url) => {
-				if (url.toString().includes("/v1/logout")) {
-					return Response.json({ success: true });
+	it("bounds Retry-After by the current session TTL", async () => {
+		let heartbeatCalls = 0;
+		let sessionExpiresAtMs = 0;
+		global.fetch = mock(async (input) => {
+			const path = new URL(input.toString()).pathname;
+			if (path === "/v1/activate") {
+				sessionExpiresAtMs = Date.now() + 1_000;
+				return activationResponse({ sessionTtlSeconds: 1 });
+			}
+			if (path === "/v1/heartbeat") {
+				heartbeatCalls++;
+				if (heartbeatCalls === 1) {
+					return Response.json(
+						{ error: "Too many requests", code: "RATE_LIMITED" },
+						{ status: 429, headers: { "retry-after": "60" } },
+					);
 				}
-				handshakes++;
-				if (handshakes === 1) {
-					return Response.json({
-						success: true,
-						type: "PERPETUAL",
-						customFields: {},
-						sessionToken: "11111111-1111-4111-8111-111111111111",
-						sessionTtlSeconds: 45,
-					});
+				if (Date.now() >= sessionExpiresAtMs) {
+					return Response.json(
+						{
+							error: "Session expired",
+							code: "SESSION_INVALID_OR_EXPIRED",
+						},
+						{ status: 403 },
+					);
 				}
-				return Response.json(scenario.payload, { status: 403 });
-			}) as unknown as typeof fetch;
-			const client = new LicenseClient({
-				apiKey: "test-key",
-				serverUrl: "https://licenses.example.com",
-				heartbeatIntervalMs: 1,
-			});
-			const emitted = new Promise<string>((resolve) => {
-				client.events.once(scenario.event, resolve);
-			});
-			let timeout: ReturnType<typeof setTimeout> | undefined;
-			try {
-				await client.initialize();
-				const reason = await Promise.race([
-					emitted,
-					new Promise<never>((_, reject) => {
-						timeout = setTimeout(
-							() => reject(new Error(`No ${scenario.event} event was emitted`)),
-							500,
-						);
-					}),
-				]);
-				expect(reason).toBe(scenario.payload.error);
-			} finally {
-				if (timeout) clearTimeout(timeout);
-				await client.destroy();
+				return activationResponse({ sessionTtlSeconds: 1 });
 			}
-		}
-	});
-
-	it("honors Retry-After without consuming a heartbeat strike", async () => {
-		let handshakes = 0;
-		global.fetch = mock(async (url) => {
-			if (url.toString().includes("/v1/logout")) {
-				return Response.json({ success: true });
-			}
-			handshakes++;
-			if (handshakes === 2) {
-				return Response.json(
-					{ error: "Too Many Requests", code: "RATE_LIMITED" },
-					{ status: 429, headers: { "retry-after": "0" } },
-				);
-			}
-			return Response.json({
-				success: true,
-				type: "PERPETUAL",
-				customFields: {},
-				sessionToken: "11111111-1111-4111-8111-111111111111",
-				sessionTtlSeconds: 45,
-			});
+			return Response.json({ success: true });
 		}) as unknown as typeof fetch;
-		const client = new LicenseClient({
-			apiKey: "test-key",
-			serverUrl: "https://licenses.example.com",
-			heartbeatIntervalMs: 1,
+		const client = createClient({
+			heartbeatIntervalMs: 1_000,
 			maxRetries: 1,
+			requestTimeoutMs: 1,
 		});
 		let failures = 0;
 		client.events.on("heartbeat:failed", () => failures++);
 		const throttled = new Promise<number>((resolve) => {
 			client.events.once("heartbeat:throttled", resolve);
 		});
-		const recovered = new Promise<void>((resolve) => {
+		const recovered = new Promise<ActivationResult>((resolve) => {
 			client.events.once("heartbeat:success", resolve);
 		});
-		let timeout: ReturnType<typeof setTimeout> | undefined;
-		try {
-			await client.initialize();
-			const outcome = await Promise.race([
-				Promise.all([throttled, recovered]),
-				new Promise<never>((_, reject) => {
-					timeout = setTimeout(
-						() => reject(new Error("Throttled heartbeat did not recover")),
-						500,
-					);
-				}),
-			]);
-			expect(outcome[0]).toBe(1);
-			expect(failures).toBe(0);
-		} finally {
-			if (timeout) clearTimeout(timeout);
-			await client.destroy();
-		}
+		await client.activate();
+		const [delay] = await Promise.race([
+			Promise.all([throttled, recovered]),
+			Bun.sleep(1_500).then(() => {
+				throw new Error("Throttled heartbeat did not recover");
+			}),
+		]);
+		expect(delay).toBeLessThan(334);
+		expect(heartbeatCalls).toBe(2);
+		expect(Date.now()).toBeLessThan(sessionExpiresAtMs);
+		expect(failures).toBe(0);
 	});
 
-	it("warns when best-effort logout returns a non-success response", async () => {
-		global.fetch = mock(async (url) => {
-			if (url.toString().includes("/v1/logout")) {
-				return Response.json({ error: "failure" }, { status: 503 });
+	it("terminates repeated expiry-clamped throttles without a retry storm", async () => {
+		let heartbeatCalls = 0;
+		global.fetch = mock(async (input) => {
+			const path = new URL(input.toString()).pathname;
+			if (path === "/v1/activate") {
+				return activationResponse({ sessionTtlSeconds: 1 });
 			}
-			return Response.json({
-				success: true,
-				type: "PERPETUAL",
-				customFields: {},
-				sessionToken: "11111111-1111-4111-8111-111111111111",
-				sessionTtlSeconds: 45,
-			});
-		}) as unknown as typeof fetch;
-		const client = new LicenseClient({
-			apiKey: "test-key",
-			serverUrl: "https://licenses.example.com",
-			logLevel: "warn",
-		});
-		await client.initialize();
-		await client.destroy();
-		expect(console.warn).toHaveBeenCalledWith(
-			expect.stringContaining("HTTP 503"),
-		);
-	});
-
-	it("cannot be reactivated by an initialization response after destroy", async () => {
-		let resolveHandshake: ((response: Response) => void) | undefined;
-		global.fetch = mock(async (url: string | URL | Request) => {
-			if (url.toString().includes("/v1/logout")) {
-				return new Response(JSON.stringify({ success: true }));
+			if (path === "/v1/heartbeat") {
+				heartbeatCalls++;
+				return Response.json(
+					{ error: "Too many requests", code: "RATE_LIMITED" },
+					{ status: 429, headers: { "retry-after": "60" } },
+				);
 			}
-			return await new Promise<Response>((resolve) => {
-				resolveHandshake = resolve;
-			});
+			return Response.json({ success: true });
 		}) as unknown as typeof fetch;
-
-		const client = new LicenseClient({
-			apiKey: "test-key",
-			serverUrl: "http://localhost:3000",
+		const client = createClient({
+			heartbeatIntervalMs: 1_000,
+			maxRetries: 5,
+			requestTimeoutMs: 1,
 		});
-		const initialization = client.initialize();
-		await client.destroy();
-		if (!resolveHandshake) throw new Error("Handshake did not start");
-		resolveHandshake(
-			new Response(
-				JSON.stringify({
-					success: true,
-					type: "PERPETUAL",
-					customFields: {},
-					sessionToken: "11111111-1111-4111-8111-111111111111",
-				}),
-			),
-		);
-		expect(initialization).rejects.toThrow(
-			"LicenseClient was destroyed during initialization",
-		);
+		const offline = new Promise<string>((resolve) => {
+			client.events.once("network:offline", resolve);
+		});
+
+		await client.activate();
+		await Promise.race([
+			offline,
+			Bun.sleep(1_500).then(() => {
+				throw new Error("Repeated throttle did not terminate");
+			}),
+		]);
+		await Bun.sleep(20);
+		expect(heartbeatCalls).toBe(2);
 	});
 
-	it("throws error and cleans up on invalid handshake", async () => {
-		global.fetch = mock(async () => {
-			return new Response(JSON.stringify({ error: "Invalid API key" }), {
-				status: 403,
-			});
+	it("maps an invalid heartbeat session to a fatal session event", async () => {
+		global.fetch = mock(async (input) => {
+			const path = new URL(input.toString()).pathname;
+			if (path === "/v1/activate") return activationResponse();
+			if (path === "/v1/heartbeat") {
+				return Response.json(
+					{
+						error: "Session expired",
+						code: "SESSION_INVALID_OR_EXPIRED",
+					},
+					{ status: 403 },
+				);
+			}
+			return Response.json({ success: true });
 		}) as unknown as typeof fetch;
-
-		const client = new LicenseClient({
-			apiKey: "invalid_key",
-			serverUrl: "http://localhost:3000",
+		const client = createClient({ heartbeatIntervalMs: 1 });
+		const expired = new Promise<string>((resolve) => {
+			client.events.once("session:expired", resolve);
 		});
+		await client.activate();
+		await expect(expired).resolves.toBe("Session expired");
+		await Bun.sleep(10);
+		await expect(
+			client.consume({ meter: "usage", units: 1, eventId: "evt" }),
+		).rejects.toThrow("not active");
+	});
 
-		try {
-			await client.initialize();
-			expect(false).toBe(true);
-		} catch (err: unknown) {
-			const error = err as Error;
-			expect(error.message).toContain("License Block: Invalid API key");
-		}
+	it("makes explicit deactivation idempotent and surfaces server errors", async () => {
+		let deactivationCalls = 0;
+		global.fetch = mock(async (input) => {
+			const path = new URL(input.toString()).pathname;
+			if (path === "/v1/activate") return activationResponse();
+			deactivationCalls++;
+			return Response.json(
+				{ error: "Unavailable", code: "INTERNAL_ERROR" },
+				{ status: 503 },
+			);
+		}) as unknown as typeof fetch;
+		const client = createClient({ logLevel: "warn" });
+		await client.activate();
+		const first = client.deactivate();
+		const second = client.deactivate();
+		expect(first).toBe(second);
+		await expect(first).rejects.toMatchObject({
+			name: "LicenseRequestError",
+			status: 503,
+			code: "INTERNAL_ERROR",
+		});
+		expect(deactivationCalls).toBe(1);
+		expect(console.warn).toHaveBeenCalled();
+	});
 
-		expect(console.error).not.toHaveBeenCalled();
-		await client.destroy();
+	it("deactivates a session created while activation is still in flight", async () => {
+		let resolveActivation: ((response: Response) => void) | undefined;
+		const requests: string[] = [];
+		global.fetch = mock(async (input) => {
+			const path = new URL(input.toString()).pathname;
+			requests.push(path);
+			if (path === "/v1/activate") {
+				return await new Promise<Response>((resolve) => {
+					resolveActivation = resolve;
+				});
+			}
+			return Response.json({ success: true });
+		}) as unknown as typeof fetch;
+		const client = createClient();
+		const activation = client.activate();
+		const deactivation = client.deactivate();
+		if (!resolveActivation) throw new Error("Activation did not start");
+		resolveActivation(activationResponse());
+		await expect(activation).rejects.toThrow("deactivated during activation");
+		await expect(deactivation).resolves.toBeUndefined();
+		expect(requests).toEqual(["/v1/activate", "/v1/deactivate"]);
+		await expect(client.activate()).rejects.toThrow("has been deactivated");
 	});
 });

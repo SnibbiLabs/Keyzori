@@ -1,64 +1,28 @@
-<div align="center">
+# Keyzori documentation
 
-# Keyzori Documentation
+Keyzori is a self-hosted license server for software products. The dashboard is exclusively for developers operating an instance; licensed product users do not receive Keyzori accounts or key-management access.
 
-Set up Keyzori, create licenses, integrate applications, and solve common problems.
+## Guides
 
-[`Quick start`](../README.md#quick-start) · [`Dashboard`](../apps/dash/README.md) · [`API`](api-reference.md) · [`SDK`](sdk-reference.md) · [`Troubleshooting`](troubleshooting.md)
-
-</div>
-
-## Start here
-
-| Goal | Recommended guide |
+| Topic | Guide |
 | --- | --- |
-| Understand what Keyzori does | [How Keyzori works](product-flow.md) |
-| Choose a license type | [Licensing models](licensing-model.md) |
-| Start a server | [Deploying Keyzori](deployment.md) |
-| Configure the server | [Configuration reference](configuration.md) |
-| Manage customers and licenses visually | [Admin dashboard](../apps/dash/README.md) |
-| Automate local administration | [Admin CLI reference](cli-reference.md) |
-| Add licensing to an application | [SDK reference](sdk-reference.md) |
-| Call Keyzori without the SDK | [HTTP API reference](api-reference.md) |
-| Fix a problem | [Troubleshooting](troubleshooting.md) |
+| Install or deploy | [Deployment](deployment.md) |
+| Configure server, dashboard, and Stripe | [Configuration](configuration.md) |
+| Understand the four types and limits | [Licensing model](licensing-model.md) |
+| Integrate an application | [SDK reference](sdk-reference.md) |
+| Call HTTP directly | [API reference](api-reference.md) |
+| Administer from the container | [CLI reference](cli-reference.md) |
+| Follow activation and session behavior | [Runtime flow](runtime-flow.md) |
+| Understand components and storage | [Architecture](architecture.md) |
+| Operate and monitor production | [Operations](operations.md) |
+| Diagnose common failures | [Troubleshooting](troubleshooting.md) |
 
-## Build a complete Keyzori flow
+## Core vocabulary
 
-1. [Deploy Keyzori](deployment.md) with PostgreSQL and Redis.
-2. [Configure](configuration.md) the server and administrator credential.
-3. Use the [admin dashboard](../apps/dash/README.md), [admin CLI](cli-reference.md), or [HTTP API](api-reference.md) to create a customer and license key.
-4. Add the [Keyzori SDK](sdk-reference.md) to the licensed application.
-5. Read [how validation works](handshake-flow.md) to understand sessions, heartbeats, limits, and revocation.
-6. Use the [operations guide](operations.md) for backups, upgrades, monitoring, and recovery.
+- A `Customer` is an operator-managed record that owns licenses.
+- A `License` contains type policy, limits, access rules, and client-visible `metadata`.
+- The full `licenseKey` is a secret shown only after creation or rotation; later views use `keyPrefix`.
+- A `deviceId` is the stable, hashed application/device identity used for registration and session binding.
+- A named meter records explicit, idempotent usage for a `metered` license.
 
-## References
-
-| Reference | Includes |
-| --- | --- |
-| [HTTP API](api-reference.md) | Authentication, routes, payloads, responses, status codes, and curl examples |
-| [Admin CLI](cli-reference.md) | Commands, options, examples, output, and database configuration |
-| [Admin dashboard](../apps/dash/README.md) | Standalone deployment, authentication, CRUD behavior, custom fields, and one-time secrets |
-| [TypeScript SDK](sdk-reference.md) | Installation, configuration, methods, events, lifecycle, and example code |
-| [Configuration](configuration.md) | Required variables, defaults, proxy settings, limits, and credential rotation |
-
-## Learn how Keyzori works
-
-| Guide | Focus |
-| --- | --- |
-| [How Keyzori works](product-flow.md) | How the CLI, server, PostgreSQL, Redis, and SDK work together |
-| [Licensing models](licensing-model.md) | Perpetual, subscription, usage, trial, device, IP, and concurrency behavior |
-| [License validation](handshake-flow.md) | Handshake order, session admission, heartbeats, logout, and rejection |
-| [Keyzori architecture](architecture.md) | Component boundaries and data flow for advanced integrations |
-
-## Run Keyzori
-
-| Guide | Focus |
-| --- | --- |
-| [Deployment](deployment.md) | Docker Compose, standalone containers, binaries, migrations, and probes |
-| [Operations](operations.md) | Backups, upgrades, rollback, monitoring, secret rotation, and recovery |
-| [Troubleshooting](troubleshooting.md) | Server, CLI, SDK, PostgreSQL, Redis, proxy, and licensing errors |
-
-> [!TIP]
-> A running Keyzori server also provides interactive API documentation at `/docs` and its OpenAPI document at `/docs/openapi.json` when `OPENAPI_ENABLED=true`.
-
-For contributing and project policy information, see [CONTRIBUTING.md](../CONTRIBUTING.md), [SECURITY.md](../SECURITY.md), and [SUPPORT.md](../SUPPORT.md).
+Start with the repository [quick start](../README.md#quick-start), then use the dashboard at `/` on port `3000` or `keyzori admin` to create the first customer and license.

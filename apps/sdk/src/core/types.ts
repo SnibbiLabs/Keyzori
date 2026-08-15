@@ -1,141 +1,155 @@
-/**
- * Defines the strictness level of the logging output by the LicenseClient.
- * - `none`: Silences all logs.
- * - `error`: Only logs errors.
- * - `warn`: Logs warnings and errors.
- * - `info`: Standard lifecycle logs.
- * - `debug`: Verbose logs for deep troubleshooting.
- */
+/** Controls the amount of internal logging produced by {@link LicenseClient}. */
 export type LogLevel = "none" | "error" | "warn" | "info" | "debug";
 
-/** License type returned by the server after validation. */
-export type KeyType = "PERPETUAL" | "SUBSCRIPTION" | "USAGE";
+/** License behavior selected by the instance operator. */
+export type LicenseType = "lifetime" | "subscription" | "metered" | "trial";
 
-/** Stable server error identifiers used for runtime licensing decisions. */
+/** Stable server error identifiers used for licensing decisions. */
 export type LicenseErrorCode =
-	| "LICENSE_INVALID_OR_REVOKED"
-	| "IP_NOT_WHITELISTED"
-	| "HWID_NOT_WHITELISTED"
-	| "TRIAL_EXPIRED"
-	| "SUBSCRIPTION_EXPIRED"
+	| "INVALID_REQUEST"
+	| "RATE_LIMITED"
+	| "LICENSE_INVALID"
+	| "LICENSE_REVOKED"
+	| "LICENSE_EXPIRED"
+	| "IP_NOT_ALLOWED"
+	| "DEVICE_NOT_ALLOWED"
 	| "SESSION_INVALID_OR_EXPIRED"
 	| "CONCURRENT_SESSION_LIMIT"
-	| "USAGE_EXHAUSTED"
+	| "METER_NOT_FOUND"
+	| "METER_ARCHIVED"
+	| "METER_EXHAUSTED"
+	| "USAGE_EVENT_CONFLICT"
 	| "IP_REGISTRATION_LIMIT"
-	| "HWID_REGISTRATION_LIMIT";
+	| "DEVICE_REGISTRATION_LIMIT"
+	| "INTERNAL_ERROR";
 
-/** A scalar value accepted in license custom fields. */
+/** A scalar JSON value. */
 export type JsonPrimitive = string | number | boolean | null;
 
-/** Any JSON-compatible value accepted in license custom fields. */
+/** A recursively JSON-compatible value. */
 export type JsonValue = JsonPrimitive | JsonObject | JsonValue[];
 
-/** Client-visible JSON metadata configured on a license. */
+/** Client-visible metadata configured on a license. */
 export type JsonObject = { [key: string]: JsonValue };
 
-/**
- * Configuration options for initializing the Keyzori LicenseClient.
- */
-export interface LicenseClientConfig {
-	/**
-	 * The unique API Key issued to the user for this application.
-	 */
-	apiKey: string;
+/** Public result returned after activation or a successful heartbeat. */
+export interface ActivationResult {
+	licenseType: LicenseType;
+	metadata: JsonObject;
+}
 
-	/**
-	 * The fully qualified URL of the Keyzori Licensing Server.
-	 */
+/** Input accepted by {@link LicenseClient.consume}. */
+export interface ConsumeInput {
+	/** Immutable meter name configured by the instance operator. */
+	meter: string;
+
+	/** Positive, safe-integer number of units to consume. */
+	units: number;
+
+	/** Per-license idempotency identifier for this usage event. */
+	eventId: string;
+}
+
+/** Successful named-meter consumption result. */
+export interface UsageResult extends ConsumeInput {
+	/** Balance remaining after the idempotent usage event. */
+	remaining: number;
+}
+
+/** Successful `/v1/activate` response. */
+export interface ActivateResponse extends ActivationResult {
+	success: true;
+	sessionToken: string;
+	sessionTtlSeconds: number;
+}
+
+/** Successful `/v1/heartbeat` response. */
+export type HeartbeatResponse = ActivateResponse;
+
+/** Successful `/v1/usage` response. */
+export interface UsageResponse extends UsageResult {
+	success: true;
+}
+
+/** Successful `/v1/deactivate` response. */
+export interface DeactivateResponse {
+	success: true;
+}
+
+/** Structured error body returned by the licensing server. */
+export interface LicenseErrorResponse {
+	error: string;
+	code?: LicenseErrorCode | (string & {});
+}
+
+/** Configuration for a {@link LicenseClient}. */
+export interface LicenseClientConfig {
+	/** Full license secret returned once by the instance operator. */
+	licenseKey: string;
+
+	/** Fully qualified URL of the Keyzori server. */
 	serverUrl: string;
 
 	/**
-	 * Optional application-specific machine identifier. The trimmed value must
-	 * contain 1–1024 characters and is transmitted only as a SHA-256 digest.
-	 * When omitted, the legacy automatic hardware identifier is used unchanged.
+	 * Optional application-specific device identifier. Its trimmed value must
+	 * contain 1-1024 characters and is transmitted only as a SHA-256 digest.
+	 * When omitted, a stable identifier is derived from the host.
 	 */
-	hardwareId?: string;
+	deviceId?: string;
 
 	/**
-	 * Interval in milliseconds between successive heartbeat/handshake requests.
-	 * @default 30000 (30 seconds)
+	 * Maximum interval between automatic heartbeats.
+	 * @default 30000
 	 */
 	heartbeatIntervalMs?: number;
 
 	/**
-	 * The number of consecutive failed heartbeats allowed before the client forcefully closes.
+	 * Consecutive transient heartbeat failures allowed before going offline.
 	 * @default 2
 	 */
 	maxRetries?: number;
 
 	/**
-	 * Maximum duration in milliseconds for each handshake or logout request.
-	 * @default 10000 (10 seconds)
+	 * Maximum duration of an HTTP request in milliseconds.
+	 * @default 10000
 	 */
 	requestTimeoutMs?: number;
 
-	/**
-	 * Logging level for the client's internal output.
-	 * @default "none"
-	 */
+	/** Internal logging level. */
 	logLevel?: LogLevel;
 }
 
-/**
- * A mapping of all lifecycle events emitted by LicenseClient.
- * You can subscribe to these using `client.events.on('eventName', callback)`.
- */
+/** Lifecycle events emitted by {@link LicenseClient}. */
 export interface LicenseEventMap {
-	/**
-	 * Emitted exactly once when the initial handshake completes successfully.
-	 * @param customFields - Client-visible JSON metadata attached to the license.
-	 */
-	ready: (customFields: JsonObject) => void;
+	/** Initial activation completed and automatic heartbeats started. */
+	ready: (activation: ActivationResult) => void;
 
-	/**
-	 * Emitted every time a recurring heartbeat completes successfully.
-	 */
-	"heartbeat:success": () => void;
+	/** A recurring heartbeat refreshed the session. */
+	"heartbeat:success": (activation: ActivationResult) => void;
 
-	/**
-	 * Emitted when a heartbeat fails but has not yet exceeded `maxRetries`.
-	 * @param error - The HTTP or network error message.
-	 * @param strikes - The current number of consecutive failures.
-	 */
+	/** A transient heartbeat failed but has not exhausted `maxRetries`. */
 	"heartbeat:failed": (error: string, strikes: number) => void;
 
-	/**
-	 * Emitted when the server rate limits a heartbeat. Throttling does not count
-	 * as a failed-heartbeat strike.
-	 * @param retryAfterMs - Delay selected from the Retry-After response header.
-	 */
+	/** A rate-limited heartbeat was rescheduled without a failure strike. */
 	"heartbeat:throttled": (retryAfterMs: number) => void;
 
-	/**
-	 * Emitted if the server explicitly rejects the license due to revocation or admin action.
-	 * @param reason - Server provided reason for revocation.
-	 */
+	/** The server reports that the license was revoked. */
 	"license:revoked": (reason: string) => void;
 
-	/**
-	 * Emitted if a Trial or Subscription period has expired.
-	 * @param reason - Server provided explanation for the expiration.
-	 */
+	/** The server reports that the license has expired. */
 	"license:expired": (reason: string) => void;
 
-	/** Emitted when the current server-side session has expired. */
+	/** The current server-issued session is no longer valid. */
 	"session:expired": (reason: string) => void;
 
-	/** Emitted for a runtime policy rejection that is not expiry or revocation. */
+	/** Another license or usage policy rejected the request. */
 	"license:rejected": (reason: string) => void;
 
-	/**
-	 * Emitted when consecutive heartbeat failures exceed `maxRetries`.
-	 * The client will forcefully destroy itself immediately after this event.
-	 * @param error - The final network error that caused the disconnection.
-	 */
+	/** Consecutive transient heartbeat failures exhausted `maxRetries`. */
 	"network:offline": (error: string) => void;
 }
 
-/** Lifecycle event subscriptions exposed by LicenseClient. */
+/** Typed event subscriptions exposed by {@link LicenseClient}. */
 export interface LicenseEvents {
 	on<K extends keyof LicenseEventMap>(
 		event: K,

@@ -1,87 +1,64 @@
 # Licensing model
 
-Every license belongs to a user and combines one key type with optional trial, IP, hardware, concurrency, whitelist, and custom-data rules.
+Keyzori separates instance operators from licensed product users. Operators manage customers and licenses through the protected dashboard, admin API, or local CLI. Product users receive no Keyzori account or dashboard access; the licensed application uses the secret and session behind the scenes.
 
-## Key types
+## License types
 
-### `PERPETUAL`
-
-Has no type-level expiration or usage balance. It can still be revoked and can still use trial, IP, HWID, concurrency, and whitelist rules.
-
-### `SUBSCRIPTION`
-
-Requires a future `expiresAt` timestamp at creation. Handshakes at or after that timestamp are rejected with `Subscription expired`.
-
-### `USAGE`
-
-Requires `limitUsage` greater than zero. One unit is consumed atomically when a new server-issued session token is admitted. Heartbeats using that same active token from its bound IP/HWID context do not consume another unit. Starting again after logout or TTL expiry creates a new session and consumes another unit.
-
-## Optional trial
-
-`trialDurationMin` can be applied to any key type. A value of `0` disables the trial rule. A positive value starts at the first successful handshake, not at key creation. At or after the activation time plus the configured duration, validation fails with `Trial has expired`.
-
-For a subscription with a trial, the earlier effective failure wins: an expired trial or subscription rejects the handshake.
-
-## IP and hardware limits
-
-| Setting | `0` means | Positive value means |
+| Type | Required policy | Runtime behavior |
 | --- | --- | --- |
-| `limitIp` | Unlimited distinct source IPs | Maximum distinct IP addresses registered to the license. |
-| `limitHwid` | Unlimited distinct hardware IDs | Maximum distinct HWIDs registered to the license. |
+| `lifetime` | None | Remains valid until manually revoked. |
+| `subscription` | Future `expiresAt` | Expires at that time. It may be renewed manually or synchronized from Stripe. |
+| `metered` | At least one active named meter | Activation and heartbeat are free. Only explicit usage reports debit balances. |
+| `trial` | Positive `trialDurationMinutes` | Starts atomically on first activation. Converting an existing license to `trial` starts a fresh trial immediately. |
 
-Keyzori stores unique `(IP, HWID)` devices and maps them to licenses. Admission is serialized per license in PostgreSQL so parallel handshakes cannot exceed a configured IP or hardware limit.
+A type change preserves the secret, customer, metadata, limits, allowlists, and registered devices. The new policy is enforced on the next runtime request. Type-specific configuration is retained as a dormant draft so an operator can switch back without rebuilding it.
 
-The official SDK derives a 64-character hexadecimal SHA-256 HWID from platform, architecture, CPU count, and sorted non-internal MAC addresses. If no usable MAC address exists, it falls back to hostname. Network-adapter, VM, or host changes can therefore appear as a new device.
+## Effective status
 
-## Concurrent sessions
+The server derives one status and reason for every license:
 
-`limitConcurrent` controls active server-issued session tokens. `0` is unlimited. A positive value is enforced atomically in Redis, including stale-session cleanup, client-context verification, and TTL refresh.
+- `active`: the current type policy permits access.
+- `expired`: a subscription expiry or started trial deadline has passed.
+- `revoked`: a manual revocation or Stripe billing revocation is active.
 
-The server stores each accepted session for 45 seconds and advertises that value as `sessionTtlSeconds`. The SDK treats its configured heartbeat interval as a maximum and clamps it to two-thirds of the advertised TTL, leaving a safety margin even when an application requests an unsafe interval. Calling `destroy()` logs out immediately. A process that crashes releases its slot after the last TTL expires.
+Manual and Stripe revocations are independent. Payment recovery can clear only a Stripe-originated revocation.
 
-Tokens are unguessable opaque values bound server-side to the admission IP/HWID context. The official SDK keeps one token inside each `LicenseClient` instance and never accepts a caller-selected session identity.
+## Device, IP, and session controls
 
-This is context-based enforcement, not hardware or process attestation. Clients behind the same public IP that deliberately reproduce the same HWID and token are indistinguishable to a self-hosted server. Products requiring resistance to a fully modified client need a platform attestation design outside Keyzori's current guarantees.
+`maxIps`, `maxDevices`, and `maxSessions` are non-negative integers. `0` means unlimited.
 
-## Explicit whitelists
+Registered IP and device slots record successful activation contexts. Operators can remove one IP or device registration, reset all registrations, and terminate active sessions. These records are separate from explicit allowlists:
 
-If a license has one or more explicit IP whitelist rows, only those IPs are accepted. If it has one or more HWID whitelist rows, only those HWIDs are accepted. An empty whitelist imposes no explicit allowlist restriction.
+- an empty IP allowlist accepts any IP subject to `maxIps`;
+- once the first IP entry is added, only listed IPs are accepted;
+- an empty device allowlist accepts any device subject to `maxDevices`;
+- once the first device entry is added, only listed device IDs are accepted.
 
-Whitelist checks run before dynamic registration limits. The bundled CLI and HTTP administration API do not expose whitelist-management commands; operators must not modify tables manually unless they own the migration and operational consequences.
+Enabling the first allowlist is intentionally restrictive and the dashboard warns before doing so. Registration is serialized per license so concurrent activations cannot overrun either limit.
 
-## Custom fields
+Sessions are opaque server-issued tokens stored in Redis, bound to the activation IP and `deviceId`, and refreshed by heartbeat. The license secret is sent only for activation. Rotation and revocation terminate existing sessions.
 
-`customFields` is an arbitrary JSON object stored with the license and returned after every successful handshake. Typical uses include plan names, enabled features, tenant identifiers, or application-specific limits.
+## Named usage meters
 
-```json
-{
-  "tier": "pro",
-  "features": ["export", "sync"],
-  "tenantId": "tenant-123"
-}
-```
+Meter names are immutable within a license. Operators may create, archive, top up, or adjust a meter. Every operator meter lifecycle or balance change requires a reason and creates a durable ledger entry.
 
-Do not store secrets in custom fields. They are returned to every application instance holding the license secret and are visible to administrators.
+Applications consume usage through `POST /v1/usage` with a positive integer `units` value and a per-license `eventId`:
 
-Customers have a separate `customFields` object for operator-only metadata such as billing IDs, company names, or internal notes. Customer fields are available through the admin API and dashboard but are never returned by handshakes or the SDK.
+- the debit and ledger insertion are one atomic transaction;
+- an identical retry returns the original result without a second debit;
+- reuse of an `eventId` with different meter or units returns `USAGE_EVENT_CONFLICT`;
+- archived, missing, or exhausted meters reject consumption without changing a balance.
 
-## Validation order
+The usage response echoes the caller's `eventId`, but the durable operator ledger stores only its SHA-256 digest.
 
-At a high level, the server:
+## Metadata and secret handling
 
-1. Resolves the secret and rejects unknown or revoked licenses.
-2. Enforces explicit IP and HWID whitelists.
-3. Enforces trial and subscription expiration.
-4. Atomically admits or refreshes the Redis session.
-5. Serializes device registration and enforces IP/HWID limits.
-6. Records first trial activation when needed.
-7. Atomically consumes one usage unit for a new `USAGE` session.
-8. Returns the key type and custom fields.
+`metadata` is arbitrary JSON returned after successful activation and heartbeat. It must not contain secrets because every licensed application holding the license can read it.
 
-If a new session fails after Redis admission, Keyzori removes that session before returning the error.
+New secrets start with `lic_`. The full `licenseKey` is returned only after creation or rotation; all later operator responses expose `keyPrefix`. Migrated `sk_` secrets remain valid because their stored hashes are preserved.
 
-## Revocation and secret storage
+## Stripe-managed subscriptions
 
-Revocation immediately blocks initial validation and the next heartbeat. Administrators can restore a revoked license by setting `revoked` to `false` through `PUT /admin/keys/:id` or the dashboard editor; the CLI exposes revocation but not restoration.
+When Stripe is configured, an operator may link an existing Stripe subscription to a `subscription` license. Keyzori does not create Checkout sessions, expose a customer portal, or give product users access to licensing controls.
 
-New secrets are generated as `sk_` plus a UUIDv7 value. PostgreSQL stores a SHA-256 digest and a display prefix, not the full secret. The committed migration backfills legacy rows, enforces non-null digests and prefixes, and drops the plaintext column.
+Current Stripe state is reconciled after every relevant webhook, so retries and event ordering do not determine access. `active`, `trialing`, and paid-through `past_due` subscriptions remain usable. Terminal or no-longer-paid-through state creates a billing revocation. Changing the license to another type unlinks it after operator confirmation and never modifies the Stripe subscription.

@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<meta name="color-scheme" content="dark" />
+		<meta name="theme-color" content="#090a0b" />
+		<title>Keyzori operator dashboard</title>
+		<link rel="stylesheet" href="/dashboard/assets/styles.css" />
+		<script src="/dashboard/assets/app.js" defer></script>
+	</head>
+	<body>
+		<section class="login-screen" id="login-screen" aria-labelledby="login-title">
+			<form class="login-card" id="login-form">
+				<div class="brand-mark" aria-hidden="true">K</div>
+				<p class="eyebrow">KEYZORI / OPERATOR</p>
+				<h1 id="login-title">Instance dashboard</h1>
+				<p class="muted">This workspace is only for the developers who operate this Keyzori instance.</p>
+				<label for="username">Username</label>
+				<input id="username" name="username" autocomplete="username" maxlength="200" required />
+				<label for="password">Password</label>
+				<input id="password" name="password" type="password" autocomplete="current-password" maxlength="1024" required />
+				<p class="form-error" id="login-error" role="alert"></p>
+				<button class="button primary full" type="submit">Sign in</button>
+			</form>
+		</section>
+
+		<div class="app-shell hidden" id="app-shell">
+			<aside class="sidebar">
+				<header class="sidebar-header">
+					<div class="brand-mark small" aria-hidden="true">K</div>
+					<div><strong>Keyzori</strong><span>Operator workspace</span></div>
+				</header>
+				<nav class="nav-list" aria-label="Dashboard sections">
+					<p class="nav-label">INSTANCE</p>
+					<button class="nav-item active" data-view="licenses" type="button"><span class="nav-index">01</span><span>Licenses</span><span class="count" id="licenses-count">0</span></button>
+					<button class="nav-item" data-view="customers" type="button"><span class="nav-index">02</span><span>Customers</span><span class="count" id="customers-count">0</span></button>
+					<button class="nav-item" data-view="statistics" type="button"><span class="nav-index">03</span><span>Statistics</span><span class="live-dot" id="live-dot" title="Realtime stream"></span></button>
+				</nav>
+				<footer class="sidebar-footer">
+					<div class="connection"><span class="status-dot online"></span><div><span>Integrated server</span><strong>Operator only</strong></div></div>
+					<button class="button subtle full" id="logout-button" type="button">Sign out</button>
+				</footer>
+			</aside>
+
+			<main class="main-panel">
+				<header class="page-header">
+					<div><p class="eyebrow">INSTANCE CONTROL</p><h2 id="view-title">Licenses</h2><p class="muted" id="view-description">Manage product access without exposing keys to customers.</p></div>
+					<div class="page-actions"><button class="button" id="refresh-button" type="button">Refresh</button><button class="button primary" id="add-button" type="button">+ Add license</button></div>
+				</header>
+
+				<div class="content-scroll">
+					<section id="records-view">
+						<div class="summary-grid" id="record-summary" aria-label="Overview"></div>
+						<section class="panel">
+							<header class="panel-toolbar">
+								<div><h3 id="records-title">All licenses</h3><p class="muted" id="records-total">0 records</p></div>
+								<div class="filters">
+									<label class="search"><span class="sr-only">Search</span><input id="search" type="search" placeholder="Search records" /><kbd>Ctrl K</kbd></label>
+									<select id="type-filter" aria-label="License type"><option value="">All types</option><option value="lifetime">Lifetime</option><option value="subscription">Subscription</option><option value="metered">Metered</option><option value="trial">Trial</option></select>
+									<select id="status-filter" aria-label="License status"><option value="">All states</option><option value="active">Active</option><option value="expired">Expired</option><option value="revoked">Revoked</option></select>
+								</div>
+							</header>
+							<div class="records-grid" id="records-grid" aria-live="polite"></div>
+							<div class="empty-state hidden" id="empty-state"><span class="brand-mark small">K</span><strong>No matching records</strong><span>Create a record or change the filters.</span></div>
+						</section>
+					</section>
+
+					<section class="hidden" id="statistics-view">
+						<div class="stats-filters panel">
+							<div><p class="eyebrow">LIVE ACTIVITY</p><h3>Realtime statistics</h3></div>
+							<div class="filters"><select id="stats-customer" aria-label="Filter by customer"><option value="">All customers</option></select><select id="stats-license" aria-label="Filter by license"><option value="">All licenses</option></select></div>
+						</div>
+						<div class="stats-grid" id="stats-totals"></div>
+						<div class="stats-layout">
+							<section class="panel chart-panel"><header><div><p class="eyebrow">LAST 24 HOURS · 15-MINUTE BUCKETS</p><h3>Runtime activity</h3></div><div class="legend"><span class="activation">Activations</span><span class="heartbeat">Heartbeats</span><span class="usage">Usage</span></div></header><div class="chart" id="activity-chart" aria-label="Activity over time"></div></section>
+							<section class="panel feed-panel"><header><div><p class="eyebrow">EVENT STREAM</p><h3>Recent activity</h3></div><span class="stream-state" id="stream-state">Connecting</span></header><div class="event-feed" id="event-feed" aria-live="polite"></div></section>
+						</div>
+					</section>
+				</div>
+			</main>
+		</div>
+
+		<dialog id="editor-dialog">
+			<form class="dialog-card" id="editor-form">
+				<header class="dialog-header"><div><p class="eyebrow" id="editor-eyebrow">NEW RECORD</p><h2 id="editor-title">Create</h2></div><button class="icon-button" data-close="editor-dialog" type="button" aria-label="Close">×</button></header>
+				<div class="dialog-body" id="editor-fields"></div>
+				<p class="form-error dialog-error" id="editor-error" role="alert"></p>
+				<footer class="dialog-footer"><button class="button" data-close="editor-dialog" type="button">Cancel</button><button class="button primary" id="editor-submit" type="submit">Save</button></footer>
+			</form>
+		</dialog>
+
+		<dialog id="confirm-dialog">
+			<form class="dialog-card compact" id="confirm-form">
+				<header class="dialog-header"><div><p class="eyebrow">CONFIRM ACTION</p><h2 id="confirm-title">Are you sure?</h2></div></header>
+				<div class="dialog-body"><p class="muted" id="confirm-copy"></p></div>
+				<footer class="dialog-footer"><button class="button" data-close="confirm-dialog" type="button">Cancel</button><button class="button danger" id="confirm-submit" type="submit">Confirm</button></footer>
+			</form>
+		</dialog>
+
+		<dialog id="secret-dialog">
+			<div class="dialog-card compact"><header class="dialog-header"><div><p class="eyebrow">ONE-TIME SECRET</p><h2>Save this license key</h2></div></header><div class="dialog-body"><p class="muted">The full key is only returned after creation or rotation. Customers never see this dashboard.</p><code class="secret-value" id="secret-value"></code></div><footer class="dialog-footer"><button class="button" data-close="secret-dialog" type="button">Done</button><button class="button primary" id="copy-secret" type="button">Copy key</button></footer></div>
+		</dialog>
+
+		<dialog id="access-dialog">
+			<div class="dialog-card wide"><header class="dialog-header"><div><p class="eyebrow">LICENSE ACCESS</p><h2 id="access-title">Access management</h2></div><button class="icon-button" data-close="access-dialog" type="button" aria-label="Close">×</button></header><div class="dialog-body"><p class="notice">Registered slots and restrictive allowlists are separate. Adding the first allowlist entry immediately restricts access to matching identifiers.</p><div class="access-grid" id="access-grid"></div></div><p class="form-error dialog-error" id="access-error"></p><footer class="dialog-footer"><button class="button danger" id="reset-devices" type="button">Reset devices</button><button class="button" data-close="access-dialog" type="button">Done</button></footer></div>
+		</dialog>
+
+		<dialog id="meters-dialog">
+			<div class="dialog-card"><header class="dialog-header"><div><p class="eyebrow">USAGE ACCOUNTING</p><h2 id="meters-title">Meters</h2></div><button class="icon-button" data-close="meters-dialog" type="button" aria-label="Close">×</button></header><div class="dialog-body"><div class="meter-list" id="meter-list"></div><form class="inline-form" id="meter-create-form"><input name="name" pattern="[a-z][a-z0-9_-]*" maxlength="128" placeholder="meter_name" required /><input name="balance" type="number" min="0" step="1" value="0" required /><input name="reason" maxlength="500" placeholder="Operator reason" required /><button class="button primary" type="submit">Create meter</button></form><p class="form-error" id="meters-error"></p></div><footer class="dialog-footer"><button class="button" data-close="meters-dialog" type="button">Done</button></footer></div>
+		</dialog>
+
+		<div class="toast" id="toast" role="status" aria-live="polite"></div>
+	</body>
+</html>

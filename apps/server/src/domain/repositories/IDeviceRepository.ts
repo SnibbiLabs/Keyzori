@@ -1,28 +1,47 @@
-import type { KeyDeviceMapping, RegisteredDevice } from "../entities";
+import type { RegisteredDevice } from "../entities";
+import type { LicenseWithAllowlists } from "./ILicenseRepository";
 
-export interface KeyDeviceUsage {
+export interface LicenseDeviceUsage {
 	uniqueIps: number;
-	uniqueHwids: number;
+	uniqueDevices: number;
 	ipRegistered: boolean;
-	hwidRegistered: boolean;
+	deviceRegistered: boolean;
 }
 
 export interface IDeviceRepository {
-	withKeyRegistrationLock<T>(
-		apiKeyId: string,
+	withLicenseRegistrationLock<T>(
+		licenseId: string,
 		operation: (repository: IDeviceRepository) => Promise<T>,
 	): Promise<T>;
-	findDevice(ip: string, hwid: string): Promise<RegisteredDevice | null>;
-	createDevice(ip: string, hwid: string): Promise<RegisteredDevice>;
-	getKeyDeviceUsage(
-		apiKeyId: string,
+	findLicenseAdmissionPolicy(
+		licenseId: string,
+	): Promise<LicenseWithAllowlists | null>;
+	incrementLicenseSessionRevision(licenseId: string): Promise<number | null>;
+	startTrialIfUnset(licenseId: string, startedAt: Date): Promise<Date | null>;
+	findRegisteredDevice(
+		licenseId: string,
 		ip: string,
-		hwid: string,
-	): Promise<KeyDeviceUsage>;
-	findMapping(
-		apiKeyId: string,
 		deviceId: string,
-	): Promise<KeyDeviceMapping | null>;
-	createMapping(apiKeyId: string, deviceId: string): Promise<KeyDeviceMapping>;
-	consumeUsage(apiKeyId: string): Promise<boolean>;
+	): Promise<RegisteredDevice | null>;
+	registerDevice(
+		licenseId: string,
+		ip: string,
+		deviceId: string,
+	): Promise<RegisteredDevice>;
+	touchDevice(id: string, seenAt: Date): Promise<void>;
+	getLicenseDeviceUsage(
+		licenseId: string,
+		ip: string,
+		deviceId: string,
+	): Promise<LicenseDeviceUsage>;
+	removeRegisteredDevice(
+		licenseId: string,
+		registeredDeviceId: string,
+	): Promise<boolean>;
+	removeRegistrationsByIp(licenseId: string, ip: string): Promise<number>;
+	removeRegistrationsByDevice(
+		licenseId: string,
+		deviceId: string,
+	): Promise<number>;
+	resetRegisteredDevices(licenseId: string): Promise<number>;
 }
