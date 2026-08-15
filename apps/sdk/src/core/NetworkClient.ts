@@ -1,66 +1,64 @@
-/**
- * Low-level class responsible for raw HTTP communication between an
- * application and the Keyzori Licensing Server. Most users should prefer
- * LicenseClient, which adds validation, events, retries, and heartbeats.
- */
+import type { ConsumeInput } from "./types";
+
+/** Raw HTTP transport used by {@link LicenseClient}. */
 export class NetworkClient {
 	private readonly serverUrl: string;
-	private readonly apiKey: string;
-	private sessionToken?: string;
-	private readonly requestTimeoutMs: number;
 
-	/**
-	 * Constructs a new NetworkClient.
-	 * @param serverUrl - The base URL of the licensing server.
-	 * @param apiKey - The user's API key.
-	 */
-	constructor(serverUrl: string, apiKey: string, requestTimeoutMs = 10_000) {
+	constructor(
+		serverUrl: string,
+		private readonly licenseKey: string,
+		private readonly requestTimeoutMs = 10_000,
+	) {
 		this.serverUrl = normalizeSecureServerUrl(serverUrl);
-		this.apiKey = apiKey;
-		this.requestTimeoutMs = requestTimeoutMs;
 	}
 
-	public setSessionToken(sessionToken: string): void {
-		this.sessionToken = sessionToken;
-	}
-
-	/**
-	 * Sends a POST request to the `/v1/handshake` endpoint.
-	 * Used for initial initialization and periodic heartbeats.
-	 *
-	 * @param hwid - The unique hardware identifier of the current machine.
-	 * @returns {Promise<Response>} The raw HTTP Fetch response.
-	 */
-	public async sendHandshake(hwid: string): Promise<Response> {
-		return fetch(`${this.serverUrl}/v1/handshake`, {
-			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				apiKey: this.apiKey,
-				hwid,
-				...(this.sessionToken ? { sessionToken: this.sessionToken } : {}),
-			}),
-			redirect: "error",
-			signal: AbortSignal.timeout(this.requestTimeoutMs),
+	/** Starts a session. This is the only request that includes the license key. */
+	public sendActivate(deviceId: string): Promise<Response> {
+		return this.post("/v1/activate", {
+			licenseKey: this.licenseKey,
+			deviceId,
 		});
 	}
 
-	/**
-	 * Sends a POST request to the `/v1/logout` endpoint.
-	 * Instructs the server to release the current server-issued session token.
-	 *
-	 * @returns {Promise<Response>} The raw HTTP Fetch response.
-	 */
-	public async sendLogout(hwid: string): Promise<Response> {
-		if (!this.sessionToken) return new Response(null, { status: 204 });
-		return fetch(`${this.serverUrl}/v1/logout`, {
+	/** Refreshes an existing server-issued session. */
+	public sendHeartbeat(
+		sessionToken: string,
+		deviceId: string,
+	): Promise<Response> {
+		return this.post("/v1/heartbeat", { sessionToken, deviceId });
+	}
+
+	/** Atomically records an idempotent named-meter usage event. */
+	public sendUsage(
+		sessionToken: string,
+		deviceId: string,
+		input: ConsumeInput,
+	): Promise<Response> {
+		return this.post("/v1/usage", {
+			sessionToken,
+			deviceId,
+			meter: input.meter,
+			units: input.units,
+			eventId: input.eventId,
+		});
+	}
+
+	/** Releases an existing server-issued session. */
+	public sendDeactivate(
+		sessionToken: string,
+		deviceId: string,
+	): Promise<Response> {
+		return this.post("/v1/deactivate", { sessionToken, deviceId });
+	}
+
+	private post(path: string, body: object): Promise<Response> {
+		return fetch(`${this.serverUrl}${path}`, {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({
-				apiKey: this.apiKey,
-				hwid,
-				sessionToken: this.sessionToken,
-			}),
+			headers: {
+				Accept: "application/json",
+				"Content-Type": "application/json",
+			},
+			body: JSON.stringify(body),
 			redirect: "error",
 			signal: AbortSignal.timeout(this.requestTimeoutMs),
 		});
@@ -69,7 +67,7 @@ export class NetworkClient {
 
 function normalizeSecureServerUrl(serverUrl: string): string {
 	try {
-		const url = new URL(serverUrl);
+		const url = new URL(serverUrl.trim());
 		const isLoopback =
 			url.hostname === "localhost" ||
 			url.hostname === "127.0.0.1" ||
@@ -83,7 +81,7 @@ function normalizeSecureServerUrl(serverUrl: string): string {
 		) {
 			throw new Error();
 		}
-		return serverUrl.replace(/\/$/, "");
+		return url.toString().replace(/\/+$/, "");
 	} catch {
 		throw new Error(
 			"serverUrl must use HTTPS (HTTP is allowed only for loopback development)",

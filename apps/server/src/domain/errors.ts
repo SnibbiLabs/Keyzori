@@ -1,20 +1,20 @@
 export type ApiErrorCode =
 	| "INVALID_REQUEST"
-	| "UNAUTHORIZED"
-	| "NOT_FOUND"
-	| "CONFLICT"
 	| "RATE_LIMITED"
-	| "INTERNAL_ERROR"
-	| "LICENSE_INVALID_OR_REVOKED"
-	| "IP_NOT_WHITELISTED"
-	| "HWID_NOT_WHITELISTED"
-	| "TRIAL_EXPIRED"
-	| "SUBSCRIPTION_EXPIRED"
+	| "LICENSE_INVALID"
+	| "LICENSE_REVOKED"
+	| "LICENSE_EXPIRED"
+	| "IP_NOT_ALLOWED"
+	| "DEVICE_NOT_ALLOWED"
 	| "SESSION_INVALID_OR_EXPIRED"
 	| "CONCURRENT_SESSION_LIMIT"
-	| "USAGE_EXHAUSTED"
+	| "METER_NOT_FOUND"
+	| "METER_ARCHIVED"
+	| "METER_EXHAUSTED"
+	| "USAGE_EVENT_CONFLICT"
 	| "IP_REGISTRATION_LIMIT"
-	| "HWID_REGISTRATION_LIMIT";
+	| "DEVICE_REGISTRATION_LIMIT"
+	| "INTERNAL_ERROR";
 
 export class DomainError extends Error {
 	constructor(
@@ -26,14 +26,15 @@ export class DomainError extends Error {
 		this.name = this.constructor.name;
 	}
 }
+
 export class NotFoundError extends DomainError {
-	constructor(resource: string) {
-		super(`${resource} not found`, 404, "NOT_FOUND");
+	constructor(resource: string, code: ApiErrorCode = "INVALID_REQUEST") {
+		super(`${resource} not found`, 404, code);
 	}
 }
 
 export class ConflictError extends DomainError {
-	constructor(message: string) {
-		super(message, 409, "CONFLICT");
+	constructor(message: string, code: ApiErrorCode = "INVALID_REQUEST") {
+		super(message, 409, code);
 	}
 }

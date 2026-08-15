@@ -5,7 +5,7 @@ const appDirectory = resolve(import.meta.dir, "..");
 const executable = resolve(
 	appDirectory,
 	"dist",
-	process.platform === "win32" ? "keyzori-server.exe" : "keyzori-server",
+	process.platform === "win32" ? "keyzori.exe" : "keyzori",
 );
 
 if (!existsSync(executable)) {
@@ -13,7 +13,7 @@ if (!existsSync(executable)) {
 	process.exit(1);
 }
 
-const server = Bun.spawn([executable, ...process.argv.slice(2)], {
+const server = Bun.spawn([executable, "serve", ...process.argv.slice(2)], {
 	stdin: "inherit",
 	stdout: "inherit",
 	stderr: "inherit",

@@ -1,70 +1,85 @@
-import { RedisClient } from "bun";
+import { RedisClient, type Server as BunServer } from "bun";
 import { openapi } from "@elysia/openapi";
 import { sql } from "drizzle-orm";
 import { Elysia, t } from "elysia";
+import { version } from "../package.json";
+import type { ActivityService } from "./application/services/ActivityService";
+import { createServiceGraph } from "./composition/services";
 import {
-	createAdminService,
-	createHandshakeService,
-} from "./composition/services";
+	loadDashboardConfig,
+	loadServerConfig,
+	type DashboardConfig,
+	type ServerConfig,
+} from "./config";
 import { adminPlugin } from "./controllers/admin";
-import { handshakePlugin } from "./controllers/handshake";
-import { loadServerConfig, type ServerConfig } from "./config";
-import { db } from "./db";
+import type { ClientIpOptions } from "./controllers/clientIp";
+import { licensePlugin } from "./controllers/license";
+import { createDashboardApi } from "./dashboard/adapter";
+import { createDashboardPlugin } from "./dashboard";
+import { db, type Database } from "./db";
 import { migrateDatabase } from "./db/migrate";
 import { DomainError } from "./domain/errors";
 import { RedisSessionRepository } from "./infrastructure/repositories/RedisSessionRepository";
+import {
+	createStripeWebhookPlugin,
+	StripeGateway,
+	StripeSubscriptionService,
+	StripeWebhookService,
+	StripeWebhookWorker,
+} from "./integrations/stripe";
 import { openApiDescription } from "./openapi/documentation";
 import { scalarThemeCss } from "./openapi/theme";
 import { createRateLimitDependencies, rateLimiter } from "./plugins/ratelimit";
-import { version } from "../package.json";
 
-export const createServer = (redis: RedisClient, config?: ServerConfig) => {
-	const trustProxyHeaders =
-		config?.trustProxyHeaders ?? Bun.env.TRUST_PROXY_HEADERS === "true";
-	const trustedProxyCidrs =
-		config?.trustedProxyCidrs ??
-		(Bun.env.TRUSTED_PROXY_CIDRS ?? "")
-			.split(",")
-			.map((value) => value.trim())
-			.filter(Boolean);
-	const trustedProxyHeader =
-		config?.trustedProxyHeader ??
-		(Bun.env.TRUSTED_PROXY_HEADER === "cf-connecting-ip"
-			? "cf-connecting-ip"
-			: "x-forwarded-for");
-	const clientIpOptions = {
-		trustProxyHeaders,
-		trustedProxyCidrs,
-		trustedProxyHeader,
-	} as const;
-	const adminRequestsPerMinute =
-		config?.rateLimitPerMinute ?? Number(Bun.env.RATE_LIMIT_PER_MINUTE ?? 60);
-	const licenseRequestsPerMinute =
-		config?.licenseRateLimitPerMinute ??
-		Number(Bun.env.LICENSE_RATE_LIMIT_PER_MINUTE ?? 30);
-	const ipRequestsPerMinute =
-		config?.rateLimitPerIpPerMinute ??
-		Number(Bun.env.RATE_LIMIT_PER_IP_PER_MINUTE ?? 6_000);
-	const { limiter, clientIpResolver } = createRateLimitDependencies(
-		redis,
-		clientIpOptions,
-	);
-	const sessionRepository = new RedisSessionRepository(redis);
+const DAY_MS = 24 * 60 * 60 * 1_000;
 
-	const adminService = createAdminService();
-	const handshakeService = createHandshakeService(sessionRepository);
+interface ServerRuntime {
+	app: ReturnType<typeof createBaseServer>;
+	activityService: ActivityService;
+	stripeWorker: StripeWebhookWorker | null;
+}
 
-	return new Elysia()
+function runtimeConfig(config?: ServerConfig) {
+	return {
+		clientIpOptions: {
+			trustProxyHeaders:
+				config?.trustProxyHeaders ??
+				Bun.env.KEYZORI_TRUST_PROXY_HEADERS === "true",
+			trustedProxyCidrs:
+				config?.trustedProxyCidrs ??
+				(Bun.env.KEYZORI_TRUSTED_PROXY_CIDRS ?? "")
+					.split(",")
+					.map((value) => value.trim())
+					.filter(Boolean),
+			trustedProxyHeader:
+				config?.trustedProxyHeader ??
+				(Bun.env.KEYZORI_TRUSTED_PROXY_HEADER === "cf-connecting-ip" ||
+				Bun.env.KEYZORI_TRUSTED_PROXY_HEADER === "*"
+					? Bun.env.KEYZORI_TRUSTED_PROXY_HEADER
+					: "x-forwarded-for"),
+		} satisfies ClientIpOptions,
+		adminRequestsPerMinute:
+			config?.rateLimitPerMinute ??
+			Number(Bun.env.KEYZORI_RATE_LIMIT_PER_MINUTE ?? 60),
+		licenseRequestsPerMinute:
+			config?.licenseRateLimitPerMinute ??
+			Number(Bun.env.KEYZORI_LICENSE_RATE_LIMIT_PER_MINUTE ?? 30),
+		ipRequestsPerMinute:
+			config?.rateLimitPerIpPerMinute ??
+			Number(Bun.env.KEYZORI_RATE_LIMIT_PER_IP_PER_MINUTE ?? 6_000),
+	};
+}
+
+function createBaseServer(openapiEnabled: boolean) {
+	return new Elysia({ normalize: false })
 		.use(
 			openapi({
-				enabled: config?.openapiEnabled ?? Bun.env.OPENAPI_ENABLED !== "false",
+				enabled: openapiEnabled,
 				path: "/docs",
 				specPath: "/docs/openapi.json",
 				provider: "scalar",
 				scalar: {
-					agent: {
-						disabled: true,
-					},
+					agent: { disabled: true },
 					version: "1.62.9",
 					theme: "none",
 					layout: "modern",
@@ -72,26 +87,16 @@ export const createServer = (redis: RedisClient, config?: ServerConfig) => {
 					showDeveloperTools: false,
 					hideDarkModeToggle: true,
 					showSidebar: true,
-					hideModels: false,
 					hideSearch: true,
-					hideDownloadButton: false,
 					hideTestRequestButton: true,
 					withDefaultFonts: false,
 					defaultOpenAllTags: false,
-					mcp: {
-						name: "My API",
-						url: "https://mcp.example.com",
-						disabled: true,
-					},
-					defaultHttpClient: {
-						targetKey: "shell",
-						clientKey: "curl",
-					},
+					defaultHttpClient: { targetKey: "shell", clientKey: "curl" },
 					customCss: scalarThemeCss,
 				},
 				documentation: {
 					info: {
-						title: "Keyzori License Server API",
+						title: "Keyzori API",
 						version,
 						description: openApiDescription,
 						license: {
@@ -99,26 +104,17 @@ export const createServer = (redis: RedisClient, config?: ServerConfig) => {
 							url: "https://www.apache.org/licenses/LICENSE-2.0",
 						},
 					},
-					servers: [
-						{
-							url: "/",
-							description: "Current Keyzori License Server",
-						},
-					],
+					servers: [{ url: "/", description: "Current Keyzori server" }],
 					tags: [
-						{
-							name: "System",
-							description: "Health and operational readiness.",
-						},
-						{
-							name: "Admin",
-							description:
-								"Create, inspect, update, and delete owners and licenses. Requires X-Admin-Key.",
-						},
+						{ name: "System", description: "Health and readiness." },
 						{
 							name: "License",
 							description:
-								"Runtime handshake, heartbeat, and logout operations used by the SDK.",
+								"Runtime activation, heartbeat, usage, and deactivation.",
+						},
+						{
+							name: "Admin",
+							description: "Operator-only customer and license management.",
 						},
 					],
 					components: {
@@ -127,8 +123,6 @@ export const createServer = (redis: RedisClient, config?: ServerConfig) => {
 								type: "apiKey",
 								in: "header",
 								name: "X-Admin-Key",
-								description:
-									"Administrative credential configured through ADMIN_API_KEY.",
 							},
 						},
 					},
@@ -139,6 +133,13 @@ export const createServer = (redis: RedisClient, config?: ServerConfig) => {
 			if (error instanceof DomainError) {
 				set.status = error.statusCode;
 				return { error: error.message, code: error.code };
+			}
+			if (code === "VALIDATION") {
+				set.status = 400;
+				return {
+					error: "Request body or parameters are invalid",
+					code: "INVALID_REQUEST" as const,
+				};
 			}
 			if (code === "INTERNAL_SERVER_ERROR" || code === "UNKNOWN") {
 				console.error(
@@ -162,17 +163,38 @@ export const createServer = (redis: RedisClient, config?: ServerConfig) => {
 			detail: {
 				operationId: "getHealth",
 				summary: "Check service liveness",
-				description:
-					"Checks the server process without querying PostgreSQL or Redis.",
 				tags: ["System"],
 			},
-		})
-		.use(rateLimiter(limiter, ipRequestsPerMinute, clientIpResolver))
+		});
+}
+
+function createServerRuntime(
+	redis: RedisClient,
+	config?: ServerConfig,
+	database: Database = db,
+	dashboardConfig: DashboardConfig | null = null,
+): ServerRuntime {
+	const settings = runtimeConfig(config);
+	const { limiter, clientIpResolver } = createRateLimitDependencies(
+		redis,
+		settings.clientIpOptions,
+	);
+	const graph = createServiceGraph(
+		new RedisSessionRepository(redis),
+		database,
+		config?.eventRetentionDays ?? 30,
+	);
+	const app = createBaseServer(
+		config?.openapiEnabled ?? Bun.env.KEYZORI_OPENAPI_ENABLED !== "false",
+	);
+
+	app
+		.use(rateLimiter(limiter, settings.ipRequestsPerMinute, clientIpResolver))
 		.get(
 			"/ready",
 			async ({ set }) => {
 				try {
-					await Promise.all([db.execute(sql`select 1`), redis.ping()]);
+					await Promise.all([database.execute(sql`select 1`), redis.ping()]);
 					return { status: "ready" as const };
 				} catch {
 					set.status = 503;
@@ -186,52 +208,124 @@ export const createServer = (redis: RedisClient, config?: ServerConfig) => {
 				},
 				detail: {
 					operationId: "getReadiness",
-					summary: "Check database and Redis readiness",
-					description:
-						"Returns ready only after both PostgreSQL and Redis respond.",
+					summary: "Check PostgreSQL and Redis readiness",
 					tags: ["System"],
 				},
 			},
 		)
 		.use(
-			handshakePlugin(handshakeService, clientIpOptions, {
+			licensePlugin(graph.licenseService, settings.clientIpOptions, {
 				limiter,
-				requestsPerMinute: licenseRequestsPerMinute,
+				requestsPerMinute: settings.licenseRequestsPerMinute,
 			}),
-		)
-		.use(
-			adminPlugin(
-				adminService,
-				config
-					? [config.adminApiKey, ...config.additionalAdminApiKeys]
-					: undefined,
-				{
-					limiter,
-					clientIpResolver,
-					requestsPerMinute: adminRequestsPerMinute,
-				},
-			),
 		);
-};
 
-async function runHealthcheck(): Promise<never> {
+	let stripeService: StripeSubscriptionService | undefined;
+	let stripeWorker: StripeWebhookWorker | null = null;
+	if (config?.stripe) {
+		const gateway = new StripeGateway(config.stripe);
+		stripeService = new StripeSubscriptionService(
+			gateway,
+			graph.licenseRepository,
+			graph.stripeSubscriptionRepository,
+			graph.activityService,
+		);
+		const webhookService = new StripeWebhookService(
+			gateway,
+			graph.stripeWebhookRepository,
+			stripeService,
+			graph.activityService,
+		);
+		stripeWorker = new StripeWebhookWorker(webhookService);
+		app.use(
+			createStripeWebhookPlugin(webhookService, {
+				onWorkAvailable: async () => {
+					await stripeWorker?.runOnce();
+				},
+			}),
+		);
+	}
+
+	app.use(
+		adminPlugin(
+			graph.adminService,
+			config
+				? [config.adminApiKey, ...config.additionalAdminApiKeys]
+				: undefined,
+			{
+				limiter,
+				clientIpResolver,
+				requestsPerMinute: settings.adminRequestsPerMinute,
+			},
+			graph.activityService,
+			stripeService,
+		),
+	);
+
+	if (dashboardConfig) {
+		app.use(
+			createDashboardPlugin({
+				config: dashboardConfig,
+				redis,
+				api: createDashboardApi(
+					graph.adminService,
+					graph.activityService,
+					stripeService,
+				),
+				activity: graph.activityService,
+				resolveClientIp: (request, server) =>
+					clientIpResolver.resolve(
+						request,
+						server as BunServer<unknown> | null,
+					),
+			}),
+		);
+	}
+
+	return {
+		app,
+		activityService: graph.activityService,
+		stripeWorker,
+	};
+}
+
+export const createServer = (
+	redis: RedisClient,
+	config?: ServerConfig,
+	database: Database = db,
+	dashboardConfig: DashboardConfig | null = null,
+) => createServerRuntime(redis, config, database, dashboardConfig).app;
+
+export async function runHealthcheck(): Promise<never> {
 	try {
-		const port = Bun.env.PORT ?? "3000";
-		const response = await fetch(`http://127.0.0.1:${port}/ready`);
+		const port = Bun.env.KEYZORI_SERVER_PORT ?? "3000";
+		const response = await fetch(`http://127.0.0.1:${port}/ready`, {
+			signal: AbortSignal.timeout(3_000),
+		});
 		process.exit(response.ok ? 0 : 1);
 	} catch {
 		process.exit(1);
 	}
 }
 
-async function main(): Promise<void> {
-	if (process.argv.includes("--healthcheck")) await runHealthcheck();
+export async function startServer(): Promise<void> {
 	const config = loadServerConfig();
-
+	const dashboardConfig = loadDashboardConfig();
 	await migrateDatabase();
 	const redis = new RedisClient(config.redisUrl);
 	await redis.connect();
-	const app = createServer(redis, config).listen({
+	const runtime = createServerRuntime(redis, config, db, dashboardConfig);
+	await runtime.activityService
+		.pruneExpiredActivity(config.eventRetentionDays)
+		.catch((error) => console.error("Initial activity pruning failed", error));
+	const pruneTimer = setInterval(() => {
+		void runtime.activityService
+			.pruneExpiredActivity(config.eventRetentionDays)
+			.catch((error) => console.error("Activity pruning failed", error));
+	}, DAY_MS);
+	pruneTimer.unref?.();
+	runtime.stripeWorker?.start();
+	const app = runtime.app.listen({
 		hostname: config.host,
 		port: config.port,
 		maxRequestBodySize: config.maxRequestBodyBytes,
@@ -241,6 +335,8 @@ async function main(): Promise<void> {
 		if (shuttingDown) return;
 		shuttingDown = true;
 		console.log(`Received ${signal}; shutting down.`);
+		clearInterval(pruneTimer);
+		runtime.stripeWorker?.stop();
 		await app.stop();
 		redis.close();
 		await db.$client.close({ timeout: 5 });
@@ -248,13 +344,6 @@ async function main(): Promise<void> {
 	process.once("SIGINT", () => void shutdown("SIGINT"));
 	process.once("SIGTERM", () => void shutdown("SIGTERM"));
 	console.log(
-		`Keyzori License Server is running at ${app.server?.hostname}:${app.server?.port}`,
+		`Keyzori is running at ${app.server?.hostname}:${app.server?.port}`,
 	);
-}
-
-if (import.meta.main) {
-	main().catch((error: unknown) => {
-		console.error(error instanceof Error ? error.message : String(error));
-		process.exit(1);
-	});
 }

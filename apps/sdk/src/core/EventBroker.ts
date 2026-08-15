@@ -71,7 +71,7 @@ export class EventBroker {
 
 	/**
 	 * Removes all listeners across all events.
-	 * Typically called during `LicenseClient.destroy()`.
+	 * Typically called during `LicenseClient.deactivate()`.
 	 */
 	public removeAllListeners(): void {
 		this.emitter.removeAllListeners();

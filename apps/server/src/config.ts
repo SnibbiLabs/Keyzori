@@ -16,22 +16,43 @@ export interface ServerConfig {
 	licenseRateLimitPerMinute: number;
 	rateLimitPerIpPerMinute: number;
 	maxRequestBodyBytes: number;
+	stripe: StripeConfig | null;
+	eventRetentionDays: number;
+}
+
+export interface DashboardConfig {
+	username: string;
+	password: string;
+	secureCookies: boolean;
+	sessionTtlMinutes: number;
+}
+
+export interface StripeConfig {
+	secretKey: string;
+	webhookSecret: string;
 }
 
 function trustedProxyCidrs(
 	environment: Record<string, string | undefined>,
 	enabled: boolean,
 ): string[] {
-	const values = (environment.TRUSTED_PROXY_CIDRS ?? "")
+	const configured = environment.KEYZORI_TRUSTED_PROXY_CIDRS?.trim() ?? "";
+	if (configured === "*") return ["*"];
+	const values = configured
 		.split(",")
 		.map((value) => value.trim())
 		.filter(Boolean);
 	if (enabled && values.length === 0) {
 		throw new Error(
-			"TRUSTED_PROXY_CIDRS must list the immediate proxy networks when TRUST_PROXY_HEADERS is true.",
+			"KEYZORI_TRUSTED_PROXY_CIDRS must list the immediate proxy networks when KEYZORI_TRUST_PROXY_HEADERS is true.",
 		);
 	}
 	for (const value of values) {
+		if (value === "*") {
+			throw new Error(
+				"KEYZORI_TRUSTED_PROXY_CIDRS must be either * or comma-separated IPv4 or IPv6 CIDR ranges.",
+			);
+		}
 		const [address, prefixText, extra] = value.split("/");
 		const family = address ? isIP(address) : 0;
 		const maximum = family === 4 ? 32 : 128;
@@ -44,7 +65,7 @@ function trustedProxyCidrs(
 			prefix > maximum
 		) {
 			throw new Error(
-				"TRUSTED_PROXY_CIDRS must contain comma-separated IPv4 or IPv6 CIDR ranges.",
+				"KEYZORI_TRUSTED_PROXY_CIDRS must contain comma-separated IPv4 or IPv6 CIDR ranges.",
 			);
 		}
 	}
@@ -62,7 +83,7 @@ function required(
 
 function serviceUrl(
 	environment: Record<string, string | undefined>,
-	name: "DATABASE_URL" | "REDIS_URL",
+	name: "KEYZORI_DATABASE_URL" | "KEYZORI_REDIS_URL",
 	protocols: readonly string[],
 ): string {
 	const value = required(environment, name);
@@ -113,26 +134,73 @@ function integerValue(
 function parseTrustedProxyHeaderMode(
 	environment: Record<string, string | undefined>,
 ): TrustedProxyHeader {
-	const value = environment.TRUSTED_PROXY_HEADER?.trim() || "x-forwarded-for";
-	if (value !== "x-forwarded-for" && value !== "cf-connecting-ip") {
+	const value =
+		environment.KEYZORI_TRUSTED_PROXY_HEADER?.trim() || "x-forwarded-for";
+	if (
+		value !== "x-forwarded-for" &&
+		value !== "cf-connecting-ip" &&
+		value !== "*"
+	) {
 		throw new Error(
-			"TRUSTED_PROXY_HEADER must be either x-forwarded-for or cf-connecting-ip.",
+			"KEYZORI_TRUSTED_PROXY_HEADER must be x-forwarded-for, cf-connecting-ip, or *.",
 		);
 	}
 	return value;
 }
 
+export function loadDashboardConfig(
+	environment: Record<string, string | undefined> = Bun.env,
+): DashboardConfig | null {
+	if (booleanValue(environment, "KEYZORI_DISABLE_DASHBOARD", false)) {
+		return null;
+	}
+	const username = required(environment, "KEYZORI_DASHBOARD_USERNAME");
+	const password = required(environment, "KEYZORI_DASHBOARD_PASSWORD");
+	if (username.length > 128) {
+		throw new Error(
+			"KEYZORI_DASHBOARD_USERNAME must contain at most 128 characters.",
+		);
+	}
+	if (
+		password.length < 16 ||
+		/^(replace|change|your[_-]?secure|example|development|password)/i.test(
+			password,
+		)
+	) {
+		throw new Error(
+			"KEYZORI_DASHBOARD_PASSWORD must be a non-placeholder secret of at least 16 characters.",
+		);
+	}
+	return {
+		username,
+		password,
+		secureCookies: booleanValue(
+			environment,
+			"KEYZORI_DASHBOARD_SECURE_COOKIES",
+			true,
+		),
+		sessionTtlMinutes: integerValue(
+			environment,
+			"KEYZORI_DASHBOARD_SESSION_TTL_MINUTES",
+			480,
+			5,
+			1_440,
+		),
+	};
+}
+
 export function loadServerConfig(
 	environment: Record<string, string | undefined> = Bun.env,
 ): ServerConfig {
-	const adminApiKey = required(environment, "ADMIN_API_KEY");
-	const additionalAdminApiKeys = (environment.ADMIN_API_KEYS ?? "")
+	const host = environment.KEYZORI_SERVER_HOST?.trim() || "0.0.0.0";
+	const adminApiKey = required(environment, "KEYZORI_ADMIN_API_KEY");
+	const additionalAdminApiKeys = (environment.KEYZORI_ADMIN_API_KEYS ?? "")
 		.split(",")
 		.map((key) => key.trim())
 		.filter(Boolean);
 	const trustProxyHeaders = booleanValue(
 		environment,
-		"TRUST_PROXY_HEADERS",
+		"KEYZORI_TRUST_PROXY_HEADERS",
 		false,
 	);
 	for (const key of [adminApiKey, ...additionalAdminApiKeys]) {
@@ -146,47 +214,95 @@ export function loadServerConfig(
 		}
 	}
 
+	const serverPort = integerValue(
+		environment,
+		"KEYZORI_SERVER_PORT",
+		3000,
+		1,
+		65_535,
+	);
+	const stripeSecretKey = environment.KEYZORI_STRIPE_SECRET_KEY?.trim() ?? "";
+	const stripeWebhookSecret =
+		environment.KEYZORI_STRIPE_WEBHOOK_SECRET?.trim() ?? "";
+	if (Boolean(stripeSecretKey) !== Boolean(stripeWebhookSecret)) {
+		throw new Error(
+			"KEYZORI_STRIPE_SECRET_KEY and KEYZORI_STRIPE_WEBHOOK_SECRET must either both be configured or both be omitted.",
+		);
+	}
+	let stripe: StripeConfig | null = null;
+	if (stripeSecretKey && stripeWebhookSecret) {
+		if (
+			stripeSecretKey.length < 16 ||
+			/^(replace|change|example|development)/i.test(stripeSecretKey)
+		) {
+			throw new Error("KEYZORI_STRIPE_SECRET_KEY is not a valid secret.");
+		}
+		if (
+			!stripeWebhookSecret.startsWith("whsec_") ||
+			stripeWebhookSecret.length < 16
+		) {
+			throw new Error(
+				"KEYZORI_STRIPE_WEBHOOK_SECRET must be a valid whsec_ secret.",
+			);
+		}
+		stripe = {
+			secretKey: stripeSecretKey,
+			webhookSecret: stripeWebhookSecret,
+		};
+	}
+
 	return {
-		databaseUrl: serviceUrl(environment, "DATABASE_URL", [
+		databaseUrl: serviceUrl(environment, "KEYZORI_DATABASE_URL", [
 			"postgres:",
 			"postgresql:",
 		]),
-		redisUrl: serviceUrl(environment, "REDIS_URL", ["redis:", "rediss:"]),
+		redisUrl: serviceUrl(environment, "KEYZORI_REDIS_URL", [
+			"redis:",
+			"rediss:",
+		]),
 		adminApiKey,
 		additionalAdminApiKeys,
-		host: environment.HOST?.trim() || "0.0.0.0",
-		port: integerValue(environment, "PORT", 3000, 1, 65_535),
+		host,
+		port: serverPort,
 		trustProxyHeaders,
 		trustedProxyCidrs: trustedProxyCidrs(environment, trustProxyHeaders),
 		trustedProxyHeader: parseTrustedProxyHeaderMode(environment),
-		openapiEnabled: booleanValue(environment, "OPENAPI_ENABLED", true),
+		openapiEnabled: booleanValue(environment, "KEYZORI_OPENAPI_ENABLED", true),
 		rateLimitPerMinute: integerValue(
 			environment,
-			"RATE_LIMIT_PER_MINUTE",
+			"KEYZORI_RATE_LIMIT_PER_MINUTE",
 			60,
 			1,
 			100_000,
 		),
 		licenseRateLimitPerMinute: integerValue(
 			environment,
-			"LICENSE_RATE_LIMIT_PER_MINUTE",
+			"KEYZORI_LICENSE_RATE_LIMIT_PER_MINUTE",
 			30,
 			1,
 			100_000,
 		),
 		rateLimitPerIpPerMinute: integerValue(
 			environment,
-			"RATE_LIMIT_PER_IP_PER_MINUTE",
+			"KEYZORI_RATE_LIMIT_PER_IP_PER_MINUTE",
 			6_000,
 			1,
 			1_000_000,
 		),
 		maxRequestBodyBytes: integerValue(
 			environment,
-			"MAX_REQUEST_BODY_BYTES",
+			"KEYZORI_MAX_REQUEST_BODY_BYTES",
 			65_536,
 			1_024,
 			10_485_760,
+		),
+		stripe,
+		eventRetentionDays: integerValue(
+			environment,
+			"KEYZORI_EVENT_RETENTION_DAYS",
+			30,
+			1,
+			365,
 		),
 	};
 }

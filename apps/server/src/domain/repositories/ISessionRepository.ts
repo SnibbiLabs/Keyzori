@@ -4,25 +4,34 @@ export type SessionRegistrationResult =
 
 export interface SessionBinding {
 	ip: string;
-	hwid: string;
+	deviceId: string;
+}
+
+export interface ResolvedSession {
+	licenseId: string;
+	sessionRevision: number;
+	token: string;
 }
 
 export interface ISessionRepository {
 	registerSession(
-		apiKeyId: string,
+		licenseId: string,
+		sessionRevision: number,
 		binding: SessionBinding,
 		ttlSeconds: number,
-		maxConcurrent: number,
+		maxSessions: number,
 	): Promise<SessionRegistrationResult>;
 	refreshSession(
-		apiKeyId: string,
 		sessionToken: string,
 		binding: SessionBinding,
 		ttlSeconds: number,
-	): Promise<boolean>;
+	): Promise<ResolvedSession | null>;
 	removeSession(
-		apiKeyId: string,
 		sessionToken: string,
 		binding: SessionBinding,
-	): Promise<boolean>;
+	): Promise<ResolvedSession | null>;
+	removeAllSessions(
+		licenseId: string,
+		preserveFromRevision?: number,
+	): Promise<number>;
 }
