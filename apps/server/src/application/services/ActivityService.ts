@@ -10,7 +10,6 @@ import type {
 	IActivityRepository,
 } from "../../domain/repositories/IActivityRepository";
 
-export type ActivityListener = (event: ActivityEvent) => void;
 export type ActivityErrorReporter = (message: string, error: unknown) => void;
 
 export interface ActivityRecorder {
@@ -52,15 +51,13 @@ export function sanitizeDetails(details: JsonObject): JsonObject {
 }
 
 export class ActivityService implements ActivityRecorder {
-	private readonly listeners = new Set<ActivityListener>();
-
 	constructor(
 		private readonly repository: IActivityRepository,
 		private readonly reportError: ActivityErrorReporter = (message, error) =>
 			console.error(message, error),
 	) {}
 
-	/** Persist and publish without allowing telemetry failure to affect licensing. */
+	/** Persist without allowing telemetry failure to affect licensing. */
 	async capture(input: NewActivityEvent): Promise<ActivityEvent | null> {
 		const sanitized: NewActivityEvent = {
 			...input,
@@ -68,39 +65,12 @@ export class ActivityService implements ActivityRecorder {
 			keyPrefix: input.keyPrefix?.slice(0, 16) ?? null,
 			details: sanitizeDetails(input.details ?? {}),
 		};
-		let event: ActivityEvent;
 		try {
-			event = await this.repository.record(sanitized);
+			return await this.repository.record(sanitized);
 		} catch (error) {
 			this.reportError("Activity persistence failed", error);
-			event = {
-				id: crypto.randomUUID(),
-				type: sanitized.type,
-				source: sanitized.source,
-				outcome: sanitized.outcome ?? "success",
-				reason: sanitized.reason ?? null,
-				licenseId: sanitized.licenseId ?? null,
-				customerId: sanitized.customerId ?? null,
-				keyPrefix: sanitized.keyPrefix ?? null,
-				ip: sanitized.ip ?? null,
-				deviceId: sanitized.deviceId ?? null,
-				details: sanitized.details ?? {},
-				createdAt: sanitized.createdAt ?? new Date(),
-			};
+			return null;
 		}
-		for (const listener of this.listeners) {
-			try {
-				listener(event);
-			} catch (error) {
-				this.reportError("Activity listener failed", error);
-			}
-		}
-		return event;
-	}
-
-	subscribe(listener: ActivityListener): () => void {
-		this.listeners.add(listener);
-		return () => this.listeners.delete(listener);
 	}
 
 	async listDetailed(query?: ActivityQuery): Promise<ActivityEvent[]> {

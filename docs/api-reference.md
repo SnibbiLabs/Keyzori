@@ -2,7 +2,7 @@
 
 Keyzori exposes system, licensed-product runtime, and instance-operator routes. Interactive Scalar documentation is available at `/docs`, with its OpenAPI document at `/docs/openapi.json`, when `KEYZORI_OPENAPI_ENABLED=true`.
 
-The optional dashboard at `/` is exclusively for developers operating the Keyzori instance. It is not a customer portal, and licensed-product users do not receive dashboard accounts, license secrets, or access to administrative APIs.
+The `/admin/*` routes are exclusively for instance operators. Licensed-product users do not receive admin credentials, license secrets, or access to administrative APIs.
 
 ## Conventions
 
@@ -305,7 +305,7 @@ General activity responses omit exact IP and device identifiers. Use the protect
 
 ## Optional Stripe routes
 
-Stripe routes and dashboard controls are mounted only when both `KEYZORI_STRIPE_SECRET_KEY` and `KEYZORI_STRIPE_WEBHOOK_SECRET` are configured. Configuring only one is a startup error.
+Stripe routes are mounted only when both `KEYZORI_STRIPE_SECRET_KEY` and `KEYZORI_STRIPE_WEBHOOK_SECRET` are configured. Configuring only one is a startup error.
 
 | Route | Body or behavior |
 | --- | --- |
@@ -320,7 +320,3 @@ Link records expose the subscription/customer IDs, status, paid-through time, ca
 Active and trialing subscriptions remain usable. A past-due subscription remains usable only through its paid-through time, and cancellation at period end remains usable until that time. Terminal or expired billing state applies a billing revocation. Payment recovery clears only a Stripe-originated billing revocation and never clears a manual revocation.
 
 Keyzori does not create Checkout sessions, customer portals, claim flows, or end-user key views.
-
-## Dashboard boundary
-
-When enabled, the dashboard is served at `/` on `KEYZORI_SERVER_PORT` and uses separate operator credentials, Redis-backed sessions, CSRF protection, same-origin checks, and an authenticated live event stream. Its browser-facing endpoints are internal implementation details rather than an end-user or stable integration API. Set `KEYZORI_DISABLE_DASHBOARD=true` to leave all dashboard assets, login, session, JSON, and event-stream routes unmounted while retaining the API routes.

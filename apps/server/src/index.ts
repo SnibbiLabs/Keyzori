@@ -1,21 +1,14 @@
-import { RedisClient, type Server as BunServer } from "bun";
+import { RedisClient } from "bun";
 import { openapi } from "@elysia/openapi";
 import { sql } from "drizzle-orm";
 import { Elysia, t } from "elysia";
 import { version } from "../package.json";
 import type { ActivityService } from "./application/services/ActivityService";
 import { createServiceGraph } from "./composition/services";
-import {
-	loadDashboardConfig,
-	loadServerConfig,
-	type DashboardConfig,
-	type ServerConfig,
-} from "./config";
+import { loadServerConfig, type ServerConfig } from "./config";
 import { adminPlugin } from "./controllers/admin";
 import type { ClientIpOptions } from "./controllers/clientIp";
 import { licensePlugin } from "./controllers/license";
-import { createDashboardApi } from "./dashboard/adapter";
-import { createDashboardPlugin } from "./dashboard";
 import { db, type Database } from "./db";
 import { migrateDatabase } from "./db/migrate";
 import { DomainError } from "./domain/errors";
@@ -173,7 +166,6 @@ function createServerRuntime(
 	redis: RedisClient,
 	config?: ServerConfig,
 	database: Database = db,
-	dashboardConfig: DashboardConfig | null = null,
 ): ServerRuntime {
 	const settings = runtimeConfig(config);
 	const { limiter, clientIpResolver } = createRateLimitDependencies(
@@ -263,26 +255,6 @@ function createServerRuntime(
 		),
 	);
 
-	if (dashboardConfig) {
-		app.use(
-			createDashboardPlugin({
-				config: dashboardConfig,
-				redis,
-				api: createDashboardApi(
-					graph.adminService,
-					graph.activityService,
-					stripeService,
-				),
-				activity: graph.activityService,
-				resolveClientIp: (request, server) =>
-					clientIpResolver.resolve(
-						request,
-						server as BunServer<unknown> | null,
-					),
-			}),
-		);
-	}
-
 	return {
 		app,
 		activityService: graph.activityService,
@@ -294,8 +266,7 @@ export const createServer = (
 	redis: RedisClient,
 	config?: ServerConfig,
 	database: Database = db,
-	dashboardConfig: DashboardConfig | null = null,
-) => createServerRuntime(redis, config, database, dashboardConfig).app;
+) => createServerRuntime(redis, config, database).app;
 
 export async function runHealthcheck(): Promise<never> {
 	try {
@@ -311,11 +282,10 @@ export async function runHealthcheck(): Promise<never> {
 
 export async function startServer(): Promise<void> {
 	const config = loadServerConfig();
-	const dashboardConfig = loadDashboardConfig();
 	await migrateDatabase();
 	const redis = new RedisClient(config.redisUrl);
 	await redis.connect();
-	const runtime = createServerRuntime(redis, config, db, dashboardConfig);
+	const runtime = createServerRuntime(redis, config, db);
 	await runtime.activityService
 		.pruneExpiredActivity(config.eventRetentionDays)
 		.catch((error) => console.error("Initial activity pruning failed", error));

@@ -1,6 +1,6 @@
 # Licensing model
 
-Keyzori separates instance operators from licensed product users. Operators manage customers and licenses through the protected dashboard, admin API, or local CLI. Product users receive no Keyzori account or dashboard access; the licensed application uses the secret and session behind the scenes.
+Keyzori separates instance operators from licensed product users. Operators manage customers and licenses through the authenticated admin API or local CLI. Product users receive no operator access; the licensed application uses the secret and session behind the scenes.
 
 ## License types
 
@@ -34,7 +34,7 @@ Registered IP and device slots record successful activation contexts. Operators 
 - an empty device allowlist accepts any device subject to `maxDevices`;
 - once the first device entry is added, only listed device IDs are accepted.
 
-Enabling the first allowlist is intentionally restrictive and the dashboard warns before doing so. Registration is serialized per license so concurrent activations cannot overrun either limit.
+Enabling the first allowlist is intentionally restrictive. Registration is serialized per license so concurrent activations cannot overrun either limit.
 
 Sessions are opaque server-issued tokens stored in Redis, bound to the activation IP and `deviceId`, and refreshed by heartbeat. The license secret is sent only for activation. Rotation and revocation terminate existing sessions.
 

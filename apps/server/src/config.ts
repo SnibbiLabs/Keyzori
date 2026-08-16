@@ -20,13 +20,6 @@ export interface ServerConfig {
 	eventRetentionDays: number;
 }
 
-export interface DashboardConfig {
-	username: string;
-	password: string;
-	secureCookies: boolean;
-	sessionTtlMinutes: number;
-}
-
 export interface StripeConfig {
 	secretKey: string;
 	webhookSecret: string;
@@ -147,47 +140,6 @@ function parseTrustedProxyHeaderMode(
 		);
 	}
 	return value;
-}
-
-export function loadDashboardConfig(
-	environment: Record<string, string | undefined> = Bun.env,
-): DashboardConfig | null {
-	if (booleanValue(environment, "KEYZORI_DISABLE_DASHBOARD", false)) {
-		return null;
-	}
-	const username = required(environment, "KEYZORI_DASHBOARD_USERNAME");
-	const password = required(environment, "KEYZORI_DASHBOARD_PASSWORD");
-	if (username.length > 128) {
-		throw new Error(
-			"KEYZORI_DASHBOARD_USERNAME must contain at most 128 characters.",
-		);
-	}
-	if (
-		password.length < 16 ||
-		/^(replace|change|your[_-]?secure|example|development|password)/i.test(
-			password,
-		)
-	) {
-		throw new Error(
-			"KEYZORI_DASHBOARD_PASSWORD must be a non-placeholder secret of at least 16 characters.",
-		);
-	}
-	return {
-		username,
-		password,
-		secureCookies: booleanValue(
-			environment,
-			"KEYZORI_DASHBOARD_SECURE_COOKIES",
-			true,
-		),
-		sessionTtlMinutes: integerValue(
-			environment,
-			"KEYZORI_DASHBOARD_SESSION_TTL_MINUTES",
-			480,
-			5,
-			1_440,
-		),
-	};
 }
 
 export function loadServerConfig(

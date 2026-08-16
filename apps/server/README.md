@@ -1,6 +1,6 @@
 # Keyzori server
 
-The server workspace contains the HTTP API, optional embedded operator dashboard, application services, PostgreSQL/Redis adapters, migrations, local admin CLI, Stripe synchronization, and unified Docker build.
+The server workspace contains the HTTP API, application services, PostgreSQL/Redis adapters, migrations, local admin CLI, Stripe synchronization, and Docker build.
 
 ## Run
 
@@ -12,7 +12,7 @@ bun run setup
 bun run dev
 ```
 
-The API serves `/health`, `/ready`, and `/docs` on `KEYZORI_SERVER_PORT`. Unless disabled, the same listener serves `/` and `/dashboard/*`.
+The API serves `/health`, `/ready`, and `/docs` on `KEYZORI_SERVER_PORT`.
 
 ## Runtime API
 
@@ -27,7 +27,6 @@ Only activation receives the full secret. See the [runtime flow](../../docs/runt
 
 ## Operator surfaces
 
-- The embedded dashboard uses separate credentials, Redis sessions/login throttling, CSRF and same-origin enforcement, scoped security headers, and authenticated SSE.
 - `/admin/customers` and `/admin/licenses` use `X-Admin-Key` and expose explicit management actions for status, access, sessions, rotation, meters, and optional Stripe linking.
 - `keyzori admin ...` calls the same application services directly against PostgreSQL.
 
@@ -60,4 +59,4 @@ bun run docker:build
 docker run --env-file .env -p 3000:3000 keyzori-license-server
 ```
 
-The final pinned distroless image is non-root and contains no Bun installation, `node_modules`, separate dashboard process, or second CLI executable. Set `KEYZORI_DISABLE_DASHBOARD=true` to run API-only. See [configuration](../../docs/configuration.md) and [deployment](../../docs/deployment.md).
+The final pinned distroless image is non-root and contains no Bun installation, `node_modules`, or second CLI executable. See [configuration](../../docs/configuration.md) and [deployment](../../docs/deployment.md).

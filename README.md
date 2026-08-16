@@ -12,13 +12,10 @@
 
 </div>
 
-> [!NOTE]
-> The dashboard is exclusively for developers operating a Keyzori instance. Licensed product users have no Keyzori account, dashboard, or key-management access.
-
 > [!WARNING]
 > Keyzori is under active development and this release intentionally contains breaking API and database naming changes.
 
-Keyzori ships one server image containing the API, optional operator dashboard, admin CLI, and a typed client SDK. You control the server, PostgreSQL database, Redis instance, and licensing data.
+Keyzori ships one server image containing the API and admin CLI, plus a typed client SDK. You control the server, PostgreSQL database, Redis instance, and licensing data.
 
 ## License types
 
@@ -38,23 +35,19 @@ Keyzori requires Bun, PostgreSQL, and Redis.
 ```powershell
 Copy-Item .env.example .env
 # Replace every placeholder secret and configure dependency URLs.
-# For direct localhost HTTP only, set KEYZORI_DASHBOARD_SECURE_COOKIES=false.
 bun run setup
 bun run dev
 ```
 
-The API and enabled operator dashboard start at `http://localhost:3000`:
+The API starts at `http://localhost:3000`:
 
 | URL | Purpose |
 | --- | --- |
-| `http://localhost:3000/` | Operator dashboard |
 | `/health` | Process liveness |
 | `/ready` | PostgreSQL and Redis readiness |
 | `/docs` | Interactive operator/runtime API reference |
 
-Sign in with `KEYZORI_DASHBOARD_USERNAME` and `KEYZORI_DASHBOARD_PASSWORD`, create a customer, then create a license. The full `lic_...` secret is shown only after creation or rotation; store it immediately.
-
-To run without the dashboard, set `KEYZORI_DISABLE_DASHBOARD=true`. The same image continues serving the API, but mounts no dashboard assets, login, session, JSON, or SSE routes.
+Use `keyzori admin` or the authenticated `/admin/*` API to create a customer and license. The full `lic_...` secret is returned only after creation or rotation; store it immediately.
 
 ## SDK integration
 
@@ -99,7 +92,7 @@ Stripe controls and webhook processing are absent unless both `KEYZORI_STRIPE_SE
 
 | Command | Purpose |
 | --- | --- |
-| `bun run dev` | Start the API and optional dashboard in watch mode |
+| `bun run dev` | Start the API in watch mode |
 | `bun run cli:help` | Show local operator commands |
 | `bun run build` | Build the unified server executable and SDK |
 | `bun run typecheck` | Type-check all workspaces and cross-app tests |

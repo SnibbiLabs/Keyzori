@@ -13,7 +13,7 @@
 The Keyzori SDK activates a license, manages its device-bound session, sends automatic heartbeats, records named-meter usage, and releases the session cleanly.
 
 > [!NOTE]
-> This is not a browser SDK. Keep the license secret in a trusted desktop or server runtime. Licensed product users do not need a Keyzori account or dashboard access.
+> This is not a browser SDK. Keep the license secret in a trusted desktop or server runtime. Licensed product users do not need access to Keyzori's operator API or CLI.
 
 ## Install
 

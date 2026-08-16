@@ -1,12 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { loadDashboardConfig, loadServerConfig } from "../config";
+import { loadServerConfig } from "../config";
 
 const validEnvironment = {
 	KEYZORI_DATABASE_URL: "postgresql://localhost/keyzori",
 	KEYZORI_REDIS_URL: "redis://localhost:6379",
 	KEYZORI_ADMIN_API_KEY: "a-secure-production-key-that-is-long-enough",
-	KEYZORI_DASHBOARD_USERNAME: "operator",
-	KEYZORI_DASHBOARD_PASSWORD: "a-separate-dashboard-password",
 	KEYZORI_TRUSTED_PROXY_HEADER: "x-forwarded-for",
 };
 
@@ -154,21 +152,6 @@ describe("loadServerConfig", () => {
 				KEYZORI_REDIS_URL: "https://redis.test",
 			}),
 		).toThrow("KEYZORI_REDIS_URL must use redis or rediss");
-	});
-
-	test("requires separate dashboard credentials unless disabled", () => {
-		const withoutDashboardCredentials = { ...validEnvironment };
-		delete (withoutDashboardCredentials as Partial<typeof validEnvironment>)
-			.KEYZORI_DASHBOARD_USERNAME;
-		expect(() => loadDashboardConfig(withoutDashboardCredentials)).toThrow(
-			"KEYZORI_DASHBOARD_USERNAME must be configured",
-		);
-		expect(
-			loadDashboardConfig({
-				...withoutDashboardCredentials,
-				KEYZORI_DISABLE_DASHBOARD: "true",
-			}),
-		).toBeNull();
 	});
 
 	test("enables Stripe only with a complete credential pair", () => {

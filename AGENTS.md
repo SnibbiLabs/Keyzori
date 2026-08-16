@@ -6,7 +6,7 @@ These instructions apply to the entire repository.
 
 Keyzori is a self-hosted software-license manager built as a Bun and TypeScript monorepo:
 
-- `apps/server`: Elysia API, embedded operator dashboard, CLI, PostgreSQL, Redis, and Stripe integration.
+- `apps/server`: Elysia API, CLI, PostgreSQL, Redis, and Stripe integration.
 - `apps/sdk`: public typed client SDK.
 - `tests`: cross-package and compiled-artifact tests.
 - `docs`: product, API, deployment, and operations documentation.
@@ -52,7 +52,6 @@ Useful scoped commands include:
 bun run check:server
 bun run check:cli
 bun run check:sdk
-bun run test:dashboard
 bun run test:flow
 bun run test:sdk:compiled
 bun run db:check

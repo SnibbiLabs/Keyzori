@@ -2,7 +2,7 @@
 
 ## Operator setup
 
-1. The instance operator signs in to the optional embedded dashboard or uses `keyzori admin`.
+1. The instance operator uses `keyzori admin` or the authenticated `/admin/*` API.
 2. They create a `Customer`, then create a `License` with one of the four supported types.
 3. Keyzori reveals the new `licenseKey` once. Later views show only `keyPrefix`.
 4. For a metered license, the operator creates one or more named meters. For a Stripe-managed subscription, they link an existing Stripe subscription.
@@ -18,6 +18,6 @@
 
 ## Operator feedback
 
-Every material management or runtime action updates lifetime totals. Detailed audit, rejection, and usage records are retained for the configured window, while the dashboard aggregates the latest 24 hours of minute buckets into at most 96 chart points. Authenticated dashboard sessions receive sanitized activity over SSE and reload durable recent activity whenever the stream connects or reconnects.
+Every material management or runtime action updates lifetime totals. Detailed audit, rejection, and usage records are retained for the configured window and available through the authenticated activity and statistics APIs.
 
 Operators can revoke or restore a license, rotate its secret, terminate sessions, release registered IP/device slots, manage allowlists, and create, archive, top up, or adjust meters with an audited reason. Type, status, expiry, allowlist, metadata, and session-revision changes apply on the next runtime request. Registration and concurrency limits gate future registrations or activations rather than silently ejecting a valid session.

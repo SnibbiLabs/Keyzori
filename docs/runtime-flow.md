@@ -38,4 +38,4 @@ Activation validates the secret, effective status, allowlists, trial start, regi
 
 Heartbeat never consumes a meter. A usage report is accepted only for a `metered` license and performs its idempotency check, balance check, debit, and ledger write atomically.
 
-Runtime attempts and outcomes are recorded around the licensing decision. Telemetry persistence failures are isolated from successful license operations. Live dashboard events omit exact IP and device identifiers; those values are available only in the protected per-license access view.
+Runtime attempts and outcomes are recorded around the licensing decision. Telemetry persistence failures are isolated from successful license operations. General activity responses omit exact IP and device identifiers; those values are available only in the protected per-license access view.

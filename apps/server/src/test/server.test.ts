@@ -1,6 +1,6 @@
 import { describe, expect, it, mock } from "bun:test";
 import type { RedisClient } from "bun";
-import type { DashboardConfig, ServerConfig } from "../config";
+import type { ServerConfig } from "../config";
 import type { Database } from "../db";
 import { DomainError } from "../domain/errors";
 import { createServer } from "../index";
@@ -37,13 +37,6 @@ function dependencies() {
 	} as unknown as Database;
 	return { redis, database };
 }
-
-const dashboardConfig: DashboardConfig = {
-	username: "operator",
-	password: "dashboard-password-strong",
-	secureCookies: false,
-	sessionTtlMinutes: 480,
-};
 
 function jsonRequest(
 	path: string,
@@ -115,7 +108,6 @@ describe("Keyzori server", () => {
 		};
 
 		expect(document.info.title).toBe("Keyzori API");
-		expect(document.info.description).toContain("`KEYZORI_DISABLE_DASHBOARD`");
 		expect(document.info.description).toContain("`KEYZORI_STRIPE_SECRET_KEY`");
 		expect(document.paths["/v1/activate"]?.post?.operationId).toBe(
 			"activateLicense",
@@ -139,11 +131,6 @@ describe("Keyzori server", () => {
 			}
 		}
 		expect(document.paths["/"]).toBeUndefined();
-		expect(
-			Object.keys(document.paths).some((path) =>
-				path.startsWith("/dashboard/"),
-			),
-		).toBe(false);
 		expect(document.paths["/v1/handshake"]).toBeUndefined();
 		expect(document.paths["/admin/users"]).toBeUndefined();
 		expect(document.paths["/admin/keys"]).toBeUndefined();
@@ -232,48 +219,11 @@ describe("Keyzori server", () => {
 		expect(removed.status).toBe(404);
 	});
 
-	it("mounts dashboard routes only when enabled", async () => {
+	it("does not expose optional Stripe routes without configuration", async () => {
 		const { redis, database } = dependencies();
-		const enabled = createServer(
-			redis,
-			serverConfig({ stripe: null }),
-			database,
-			dashboardConfig,
-		);
-		const page = await enabled.handle(new Request("http://localhost:3000/"));
-		expect(page.status).toBe(200);
-		expect(await page.text()).toContain("Instance dashboard");
-		const asset = await enabled.handle(
-			new Request("http://localhost:3000/dashboard/assets/app.js"),
-		);
-		expect(asset.status).toBe(200);
+		const app = createServer(redis, serverConfig({ stripe: null }), database);
 
-		const disabled = createServer(
-			redis,
-			serverConfig({ stripe: null }),
-			database,
-		);
-
-		for (const path of [
-			"/",
-			"/dashboard/assets/app.js",
-			"/dashboard/api/session",
-			"/dashboard/api/events",
-		]) {
-			const response = await disabled.handle(
-				new Request(`http://localhost:3000${path}`),
-			);
-			expect(response.status).toBe(404);
-		}
-		const dashboardLogin = await disabled.handle(
-			jsonRequest("/dashboard/api/login", {
-				username: "operator",
-				password: "dashboard-password-strong",
-			}),
-		);
-		expect(dashboardLogin.status).toBe(404);
-
-		const stripeWebhook = await disabled.handle(
+		const stripeWebhook = await app.handle(
 			new Request("http://localhost:3000/webhooks/stripe", {
 				method: "POST",
 				headers: { "stripe-signature": "test" },
@@ -282,7 +232,7 @@ describe("Keyzori server", () => {
 		);
 		expect(stripeWebhook.status).toBe(404);
 
-		const stripeAdmin = await disabled.handle(
+		const stripeAdmin = await app.handle(
 			new Request("http://localhost:3000/admin/licenses/license-1/stripe", {
 				headers: { "x-admin-key": "admin-secret" },
 			}),
