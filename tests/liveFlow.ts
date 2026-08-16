@@ -55,6 +55,7 @@ let createdDatabase = false;
 const createdLicenseIds = new Set<string>();
 const port = 32_000 + Math.floor(Math.random() * 4_000);
 const serverUrl = `http://127.0.0.1:${port}`;
+const serverStartupTimeoutMs = 60_000;
 const adminKey = Bun.env.KEYZORI_ADMIN_API_KEY as string;
 const runtimeEnvironment = {
 	...Bun.env,
@@ -73,6 +74,15 @@ const runtimeEnvironment = {
 interface CreatedRecord {
 	id: string;
 	licenseKey?: string;
+}
+
+interface StartupDatabaseActivity {
+	pid: number;
+	state: string | null;
+	waitEventType: string | null;
+	waitEvent: string | null;
+	blockingPids: string;
+	query: string;
 }
 
 function assert(condition: unknown, message: string): asserts condition {
@@ -262,22 +272,58 @@ async function seedLegacyData(sql: SQL): Promise<Record<string, string>> {
 	return secrets;
 }
 
+async function collectStartupDatabaseActivity(): Promise<string> {
+	const diagnosticDatabase = new SQL(testDatabaseUrl.toString());
+	try {
+		const activity = await diagnosticDatabase<StartupDatabaseActivity[]>`
+			SELECT
+				"pid",
+				"state",
+				"wait_event_type" AS "waitEventType",
+				"wait_event" AS "waitEvent",
+				pg_blocking_pids("pid")::text AS "blockingPids",
+				left("query", 500) AS "query"
+			FROM pg_stat_activity
+			WHERE "datname" = ${databaseName}
+				AND "pid" <> pg_backend_pid()
+			ORDER BY "pid"
+		`;
+		return activity.length > 0
+			? JSON.stringify(activity, null, 2)
+			: "No PostgreSQL sessions were active for the live-test database.";
+	} catch (error) {
+		return `PostgreSQL startup diagnostics unavailable: ${String(error)}`;
+	} finally {
+		await diagnosticDatabase.close({ timeout: 1 }).catch(() => undefined);
+	}
+}
+
 async function waitForServer(): Promise<void> {
-	for (let attempt = 0; attempt < 80; attempt++) {
-		if (server?.exitCode !== null) {
+	if (!server) throw new Error("Server process was not started.");
+	const deadline = Date.now() + serverStartupTimeoutMs;
+	while (Date.now() < deadline) {
+		if (server.exitCode !== null) {
 			throw new Error(
-				`Server exited during startup with code ${server?.exitCode}.`,
+				`Server exited during startup with code ${server.exitCode}.`,
 			);
 		}
 		try {
-			const response = await fetch(`${serverUrl}/ready`);
+			const response = await fetch(`${serverUrl}/ready`, {
+				signal: AbortSignal.timeout(
+					Math.min(1_000, Math.max(1, deadline - Date.now())),
+				),
+			});
 			if (response.ok) return;
 		} catch {
 			// Migrations and dependency connections may still be in progress.
 		}
-		await Bun.sleep(250);
+		const remaining = deadline - Date.now();
+		if (remaining > 0) await Bun.sleep(Math.min(250, remaining));
 	}
-	throw new Error("Server did not become ready within 20 seconds.");
+	const activity = await collectStartupDatabaseActivity();
+	throw new Error(
+		`Server did not become ready within ${serverStartupTimeoutMs / 1_000} seconds.\nPostgreSQL activity:\n${activity}`,
+	);
 }
 
 async function runCli(arguments_: string[]): Promise<string> {
@@ -892,14 +938,18 @@ try {
 	await database`SELECT 1`;
 	await applyPreOverhaulMigrations(database);
 	const legacySecrets = await seedLegacyData(database);
+	await database.close({ timeout: 5 });
+	database = undefined;
 
 	server = Bun.spawn([keyzoriBinary, "serve"], {
 		cwd: serverDirectory,
 		env: runtimeEnvironment,
-		stdout: "ignore",
+		stdout: "inherit",
 		stderr: "inherit",
 	});
 	await waitForServer();
+	database = new SQL(testDatabaseUrl.toString());
+	await database`SELECT 1`;
 	const openapiResponse = await fetch(`${serverUrl}/docs/openapi.json`);
 	assert(openapiResponse.ok, "Canonical OpenAPI document was unavailable.");
 	const openapiText = await openapiResponse.text();
