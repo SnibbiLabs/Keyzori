@@ -77,7 +77,6 @@ jobs:
           KEYZORI_DATABASE_URL: postgresql://keyzori:keyzori-ci-password@127.0.0.1:5432/keyzori
           KEYZORI_REDIS_URL: redis://127.0.0.1:6379
           KEYZORI_ADMIN_API_KEY: ci-only-admin-key-that-is-at-least-32-characters
-          KEYZORI_DISABLE_DASHBOARD: "true"
       - name: Validate Compose configuration
         run: |
           docker compose --file dev.docker-compose.yml config --quiet
@@ -121,27 +120,17 @@ jobs:
           docker run --rm "${image}" admin --help >/dev/null
 
           run_server() {
-            local dashboard_disabled="$1"
-            local args=(
-              --detach
-              --network host
-              --read-only
-              --tmpfs /tmp:rw,noexec,nosuid,size=16m
-              --cap-drop ALL
-              --security-opt no-new-privileges:true
-              --env KEYZORI_DATABASE_URL=postgresql://keyzori:keyzori-ci-password@127.0.0.1:5432/keyzori
-              --env KEYZORI_REDIS_URL=redis://127.0.0.1:6379
-              --env KEYZORI_ADMIN_API_KEY=ci-only-admin-key-that-is-at-least-32-characters
-              --env KEYZORI_DISABLE_DASHBOARD="${dashboard_disabled}"
-            )
-            if [[ "${dashboard_disabled}" == "false" ]]; then
-              args+=(
-                --env KEYZORI_DASHBOARD_USERNAME=ci-operator
-                --env KEYZORI_DASHBOARD_PASSWORD=ci-dashboard-password-that-is-distinct
-                --env KEYZORI_DASHBOARD_SECURE_COOKIES=false
-              )
-            fi
-            docker run "${args[@]}" "${image}"
+            docker run \
+              --detach \
+              --network host \
+              --read-only \
+              --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+              --cap-drop ALL \
+              --security-opt no-new-privileges:true \
+              --env KEYZORI_DATABASE_URL=postgresql://keyzori:keyzori-ci-password@127.0.0.1:5432/keyzori \
+              --env KEYZORI_REDIS_URL=redis://127.0.0.1:6379 \
+              --env KEYZORI_ADMIN_API_KEY=ci-only-admin-key-that-is-at-least-32-characters \
+              "${image}"
           }
 
           wait_until_ready() {
@@ -161,20 +150,10 @@ jobs:
             return 1
           }
 
-          enabled=$(run_server false)
-          trap 'docker rm --force "${enabled}" >/dev/null 2>&1 || true' EXIT
-          wait_until_ready "${enabled}"
-          curl --fail --silent --show-error http://127.0.0.1:3000/ | grep --fixed-strings "Instance dashboard" >/dev/null
-          curl --fail --silent --show-error http://127.0.0.1:3000/dashboard/assets/app.js >/dev/null
-          docker run --rm --network host "${image}" healthcheck
-          docker rm --force "${enabled}" >/dev/null
-          trap - EXIT
-
-          disabled=$(run_server true)
-          trap 'docker rm --force "${disabled}" >/dev/null 2>&1 || true' EXIT
-          wait_until_ready "${disabled}"
+          server=$(run_server)
+          trap 'docker rm --force "${server}" >/dev/null 2>&1 || true' EXIT
+          wait_until_ready "${server}"
+          curl --fail --silent --show-error http://127.0.0.1:3000/health >/dev/null
+          curl --fail --silent --show-error http://127.0.0.1:3000/docs/openapi.json >/dev/null
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/)" = "404"
-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/dashboard/api/session)" = "404"
-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/dashboard/assets/app.js)" = "404"
-          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/dashboard/api/events)" = "404"
           docker run --rm --network host "${image}" healthcheck

@@ -88,8 +88,6 @@ The multi-stage build uses version-tagged Bun and distroless base images, a froz
 - committed SQL migrations;
 - `LICENSE` and `NOTICE`.
 
-The dashboard is embedded in the same executable and image. `KEYZORI_DISABLE_DASHBOARD=true` changes route mounting, not image selection.
-
 Every release publishes `ghcr.io/snibbilabs/keyzori:v<version>`. Stable releases also update `ghcr.io/snibbilabs/keyzori:latest`; prereleases do not.
 
 ### Publish a version
