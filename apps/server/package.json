@@ -20,11 +20,11 @@
 	"dependencies": {
 		"@elysia/openapi": "^1.4.15",
 		"commander": "^15.0.0",
-		"drizzle-orm": "1.0.0-rc.4-de6c356",
+		"drizzle-orm": "1.0.0-rc.5-ab785fc",
 		"elysia": "1.4.29",
-		"stripe": "22.3.2"
+		"stripe": "22.5.0"
 	},
 	"devDependencies": {
-		"drizzle-kit": "1.0.0-rc.4-ca0f029"
+		"drizzle-kit": "1.0.0-rc.5-ab785fc"
 	}
 }
