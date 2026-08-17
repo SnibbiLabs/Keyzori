@@ -1,7 +1,7 @@
 import { Stripe } from "stripe";
 import type { StripeConfig } from "../../config";
 
-export const STRIPE_API_VERSION = "2026-06-24.dahlia" as const;
+export const STRIPE_API_VERSION = "2026-07-29.dahlia" as const;
 
 export interface StripeSubscriptionSnapshot {
 	subscriptionId: string;
