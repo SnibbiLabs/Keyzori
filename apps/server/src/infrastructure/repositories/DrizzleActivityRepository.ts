@@ -159,17 +159,17 @@ export class DrizzleActivityRepository implements IActivityRepository {
 	}
 
 	async pruneBefore(before: Date): Promise<number> {
+		// A transaction owns one connection, so these deletes must run in
+		// sequence; issuing them concurrently wedges the transaction.
 		return await this.db.transaction(async (transaction) => {
-			const [events, buckets] = await Promise.all([
-				transaction
-					.delete(activityEvents)
-					.where(lt(activityEvents.createdAt, before))
-					.returning({ id: activityEvents.id }),
-				transaction
-					.delete(activityMinuteBuckets)
-					.where(lt(activityMinuteBuckets.minute, before))
-					.returning({ minute: activityMinuteBuckets.minute }),
-			]);
+			const events = await transaction
+				.delete(activityEvents)
+				.where(lt(activityEvents.createdAt, before))
+				.returning({ id: activityEvents.id });
+			const buckets = await transaction
+				.delete(activityMinuteBuckets)
+				.where(lt(activityMinuteBuckets.minute, before))
+				.returning({ minute: activityMinuteBuckets.minute });
 			return events.length + buckets.length;
 		});
 	}
