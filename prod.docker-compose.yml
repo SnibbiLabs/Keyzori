@@ -21,7 +21,7 @@ name: "Keyzori"
 
 services:
   server:
-    image: ghcr.io/snibbilabs/keyzori:latest
+    image: ghcr.io/lilsnibbi/keyzori:latest
     environment:
       <<: *env_values
     ports:
