@@ -25,9 +25,6 @@ env:
   KEYZORI_DATABASE_URL: postgresql://keyzori:keyzori-release-password@127.0.0.1:5432/keyzori
   KEYZORI_REDIS_URL: redis://127.0.0.1:6379
   KEYZORI_ADMIN_API_KEY: release-only-admin-key-that-is-at-least-32-characters
-  KEYZORI_DASHBOARD_USERNAME: release-operator
-  KEYZORI_DASHBOARD_PASSWORD: release-dashboard-password-that-is-distinct
-  KEYZORI_DASHBOARD_SECURE_COOKIES: "false"
 
 jobs:
   release:
@@ -165,27 +162,17 @@ jobs:
           docker run --rm "${image}" admin --help >/dev/null
 
           run_server() {
-            local dashboard_disabled="$1"
-            local args=(
-              --detach
-              --network host
-              --read-only
-              --tmpfs /tmp:rw,noexec,nosuid,size=16m
-              --cap-drop ALL
-              --security-opt no-new-privileges:true
-              --env KEYZORI_DATABASE_URL
-              --env KEYZORI_REDIS_URL
-              --env KEYZORI_ADMIN_API_KEY
-              --env KEYZORI_DISABLE_DASHBOARD="${dashboard_disabled}"
-            )
-            if [[ "${dashboard_disabled}" == "false" ]]; then
-              args+=(
-                --env KEYZORI_DASHBOARD_USERNAME
-                --env KEYZORI_DASHBOARD_PASSWORD
-                --env KEYZORI_DASHBOARD_SECURE_COOKIES
-              )
-            fi
-            docker run "${args[@]}" "${image}"
+            docker run \
+              --detach \
+              --network host \
+              --read-only \
+              --tmpfs /tmp:rw,noexec,nosuid,size=16m \
+              --cap-drop ALL \
+              --security-opt no-new-privileges:true \
+              --env KEYZORI_DATABASE_URL \
+              --env KEYZORI_REDIS_URL \
+              --env KEYZORI_ADMIN_API_KEY \
+              "${image}"
           }
 
           wait_until_ready() {
@@ -205,25 +192,16 @@ jobs:
             return 1
           }
 
-          enabled=$(run_server false)
-          trap 'docker rm --force "${enabled}" >/dev/null 2>&1 || true' EXIT
-          wait_until_ready "${enabled}"
-          curl --fail --silent --show-error http://127.0.0.1:3000/ | grep --fixed-strings "Instance dashboard" >/dev/null
-          curl --fail --silent --show-error http://127.0.0.1:3000/dashboard/assets/app.js >/dev/null
-          docker run --rm --network host "${image}" healthcheck
-          docker rm --force "${enabled}" >/dev/null
-          trap - EXIT
-
-          disabled=$(run_server true)
-          trap 'docker rm --force "${disabled}" >/dev/null 2>&1 || true' EXIT
-          wait_until_ready "${disabled}"
-          for path in / /dashboard/api/session /dashboard/assets/app.js /dashboard/api/events; do
-            if [[ "$(curl --silent --output /dev/null --write-out '%{http_code}' "http://127.0.0.1:3000${path}")" != "404" ]]; then
-              docker logs "${disabled}"
-              echo "Dashboard route ${path} was mounted while disabled." >&2
-              exit 1
-            fi
-          done
+          server=$(run_server)
+          trap 'docker rm --force "${server}" >/dev/null 2>&1 || true' EXIT
+          wait_until_ready "${server}"
+          curl --fail --silent --show-error http://127.0.0.1:3000/health >/dev/null
+          curl --fail --silent --show-error http://127.0.0.1:3000/docs/openapi.json >/dev/null
+          if [[ "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/)" != "404" ]]; then
+            docker logs "${server}"
+            echo "Unexpected route mounted at /." >&2
+            exit 1
+          fi
           docker run --rm --network host "${image}" healthcheck
       - name: Push release image tags
         shell: bash

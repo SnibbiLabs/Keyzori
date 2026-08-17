@@ -10,7 +10,7 @@ docker compose --file dev.docker-compose.yml up --build -d
 docker compose --file dev.docker-compose.yml exec server keyzori admin --help
 ```
 
-Set `KEYZORI_POSTGRES_PASSWORD`, `KEYZORI_ADMIN_API_KEY`, and the two dashboard credentials in `.env` before starting. Development Compose builds locally and binds Keyzori to `127.0.0.1:3000`. PostgreSQL and Redis stay on the private network; the application runs as non-root with a read-only filesystem, drops all Linux capabilities, and enables `no-new-privileges`.
+Set `KEYZORI_POSTGRES_PASSWORD` and `KEYZORI_ADMIN_API_KEY` in `.env` before starting. Development Compose builds locally and binds Keyzori to `127.0.0.1:3000`. PostgreSQL and Redis stay on the private network; the application runs as non-root with a read-only filesystem, drops all Linux capabilities, and enables `no-new-privileges`.
 
 For production, use the published stable image and put a TLS reverse proxy in front of port `3000`:
 
@@ -18,8 +18,6 @@ For production, use the published stable image and put a TLS reverse proxy in fr
 docker compose --file prod.docker-compose.yml pull
 docker compose --file prod.docker-compose.yml up -d
 ```
-
-Keep `KEYZORI_DASHBOARD_SECURE_COOKIES=true` behind HTTPS. To operate only through the CLI/admin API, set `KEYZORI_DISABLE_DASHBOARD=true`; the same container remains available but does not mount dashboard routes.
 
 The in-container CLI uses the same PostgreSQL and Redis configuration:
 
@@ -55,13 +53,13 @@ KEYZORI_DATABASE_URL=postgresql://...
 KEYZORI_REDIS_URL=rediss://...
 ```
 
-Use encrypted connections where the providers support them, restrict network access to the Keyzori workload, and back up PostgreSQL. Redis holds replaceable runtime sessions and dashboard login state, but production Redis should still use authentication, persistence appropriate to your recovery target, and eviction monitoring.
+Use encrypted connections where the providers support them, restrict network access to the Keyzori workload, and back up PostgreSQL. Redis holds replaceable runtime sessions and rate-limit state, but production Redis should still use authentication, persistence appropriate to your recovery target, and eviction monitoring.
 
 ## Reverse proxy
 
-Forward HTTP and long-lived SSE responses without buffering. Preserve the original host and scheme. Trust forwarded client IPs only when direct server access is blocked and `KEYZORI_TRUSTED_PROXY_CIDRS` lists the immediate proxy networks.
+Preserve the original host and scheme. Trust forwarded client IPs only when direct server access is blocked and `KEYZORI_TRUSTED_PROXY_CIDRS` lists the immediate proxy networks.
 
-Route the chosen hostname to port `3000`. The same listener serves `/v1/*`, `/admin/*`, `/webhooks/stripe`, `/health`, `/ready`, `/docs`, and—when enabled—`/` plus `/dashboard/*`. Use access controls around the operator routes as appropriate for the deployment.
+Route the chosen hostname to port `3000`. The listener serves `/v1/*`, `/admin/*`, `/webhooks/stripe`, `/health`, `/ready`, and `/docs`. Use access controls around the operator routes as appropriate for the deployment.
 
 ## Stripe
 
@@ -90,9 +88,7 @@ The multi-stage build uses version-tagged Bun and distroless base images, a froz
 - committed SQL migrations;
 - `LICENSE` and `NOTICE`.
 
-The dashboard is embedded in the same executable and image. `KEYZORI_DISABLE_DASHBOARD=true` changes route mounting, not image selection.
-
-Every release publishes `ghcr.io/snibbilabs/keyzori:v<version>`. Stable releases also update `ghcr.io/snibbilabs/keyzori:latest`; prereleases do not. Every successful commit on `main` updates `ghcr.io/snibbilabs/keyzori:canary`.
+Every release publishes `ghcr.io/snibbilabs/keyzori:v<version>`. Stable releases also update `ghcr.io/snibbilabs/keyzori:latest`; prereleases do not.
 
 ### Publish a version
 
@@ -105,7 +101,7 @@ git push origin main
 git push origin $releaseTag
 ```
 
-Pushing the tag starts the Release workflow. It rejects tags that do not exactly match the package version or whose commit is not on `main`. The workflow creates a GitHub Release with automatically generated notes from the commits and merged pull requests since the previous release; it does not create new commits. A stable tag such as `v1.1.0` publishes `:v1.1.0` and moves `:latest`; a prerelease such as `v1.1.0-rc.1` publishes only its exact version tag. Neither release type changes `:canary`.
+Pushing the tag starts the Release workflow. It rejects tags that do not exactly match the package version or whose commit is not on `main`. The workflow creates a GitHub Release with automatically generated notes from the commits and merged pull requests since the previous release; it does not create new commits. A stable tag such as `v1.1.0` publishes `:v1.1.0` and moves `:latest`; a prerelease such as `v1.1.0-rc.1` publishes only its exact version tag.
 
 To republish or repair an existing tag, open **Actions → Release → Run workflow** and enter the existing `v`-prefixed tag. The tag must already exist in the repository.
 

@@ -16,7 +16,6 @@ This document is the release gate for operating Keyzori with real customer licen
 - Atomic Redis session admission and serialized PostgreSQL IP/device-limit registration under parallel activations.
 - SHA-256 license-secret storage with masked administrative listings and a complete legacy backfill that drops plaintext storage.
 - Server-issued session tokens bound to their activation IP/device context, explicit atomic named-meter usage ledgers, and exception-safe SDK lifecycle events.
-- An embedded operator-only dashboard with Redis sessions, CSRF and same-origin enforcement, login throttling, scoped CSP/security headers, realtime SSE activity, and no end-user account surface.
 - Optional Stripe subscription linking with exact-body signature verification, a durable idempotent webhook inbox, current-state reconciliation, and independent manual/billing revocation.
 - Immutable action and container references, fail-closed Compose secrets, localhost-only local port publishing, and automated Docker dependency updates.
 - An enforced 80% application-service and SDK line-coverage floor plus FOSS governance, issue, pull-request, release, and operations guidance.

@@ -1,6 +1,6 @@
 # SDK reference
 
-`keyzori` integrates trusted Bun or Node.js desktop/server applications with a Keyzori instance. Licensed product users do not need a Keyzori account or dashboard access. This is not a browser SDK because the license secret must remain private and device identification uses operating-system APIs.
+`keyzori` integrates trusted Bun or Node.js desktop/server applications with a Keyzori instance. Licensed product users do not need operator API or CLI access. This is not a browser SDK because the license secret must remain private and device identification uses operating-system APIs.
 
 ## Requirements and installation
 

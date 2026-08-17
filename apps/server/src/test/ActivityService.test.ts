@@ -6,7 +6,7 @@ import {
 import type { IActivityRepository } from "../domain/repositories/IActivityRepository";
 
 describe("ActivityService", () => {
-	test("removes secrets recursively before persistence and SSE publication", async () => {
+	test("removes secrets recursively before persistence", async () => {
 		const record = mock(async (event) => ({
 			id: "event-1",
 			type: event.type,
@@ -28,8 +28,6 @@ describe("ActivityService", () => {
 			pruneBefore: async () => 0,
 		};
 		const service = new ActivityService(repository, () => {});
-		const listener = mock(() => {});
-		service.subscribe(listener);
 		await service.capture({
 			type: "license.created",
 			source: "operator",
@@ -44,7 +42,6 @@ describe("ActivityService", () => {
 		expect(persisted?.keyPrefix).toHaveLength(16);
 		expect(persisted?.reason).toBe("[REDACTED]");
 		expect(persisted?.details).toEqual({ nested: { safe: true } });
-		expect(listener).toHaveBeenCalledTimes(1);
 	});
 
 	test("keeps licensing live when persistence fails", async () => {
@@ -57,12 +54,9 @@ describe("ActivityService", () => {
 			pruneBefore: async () => 0,
 		};
 		const service = new ActivityService(repository, () => {});
-		const listener = mock(() => {});
-		service.subscribe(listener);
 		await expect(
 			service.capture({ type: "license.heartbeat", source: "client" }),
-		).resolves.toMatchObject({ type: "license.heartbeat" });
-		expect(listener).toHaveBeenCalledTimes(1);
+		).resolves.toBeNull();
 	});
 
 	test("uses configured retention and rejects invalid values", async () => {

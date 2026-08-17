@@ -7,6 +7,7 @@ import {
 	hashLicenseKey,
 	licenseKeyPrefix,
 } from "../infrastructure/repositories/DrizzleLicenseRepository";
+import { DrizzleActivityRepository } from "../infrastructure/repositories/DrizzleActivityRepository";
 import { DrizzleMeterRepository } from "../infrastructure/repositories/DrizzleMeterRepository";
 import { DrizzleStripeWebhookRepository } from "../infrastructure/repositories/DrizzleStripeRepository";
 
@@ -245,6 +246,42 @@ describe("DrizzleMeterRepository", () => {
 		expect(
 			await repository.archiveMeter("license-1", "credits", "retired"),
 		).toEqual(archived);
+	});
+});
+
+describe("DrizzleActivityRepository", () => {
+	test("prunes both tables without overlapping queries on one transaction", async () => {
+		let running = 0;
+		let peak = 0;
+		const rows = [[{ id: "event-1" }], [{ minute: new Date(0) }]];
+
+		class TrackedDelete {
+			constructor(private readonly result: unknown[]) {}
+			where() {
+				return this;
+			}
+			async returning() {
+				running += 1;
+				peak = Math.max(peak, running);
+				await Bun.sleep(1);
+				running -= 1;
+				return this.result;
+			}
+		}
+
+		const transaction = {
+			delete: () => new TrackedDelete(rows.shift() ?? []),
+		};
+		const database = {
+			transaction: async <T>(operation: (scoped: unknown) => Promise<T>) =>
+				await operation(transaction),
+		};
+		const repository = new DrizzleActivityRepository(
+			database as unknown as Database,
+		);
+
+		expect(await repository.pruneBefore(new Date(0))).toBe(2);
+		expect(peak).toBe(1);
 	});
 });
 

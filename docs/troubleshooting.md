@@ -12,12 +12,6 @@ bun run test:live
 
 ## Startup
 
-### Dashboard credentials are required
-
-The dashboard is enabled by default. Configure a separate `KEYZORI_DASHBOARD_USERNAME` and password of at least 16 characters, or set `KEYZORI_DISABLE_DASHBOARD=true`. The password cannot equal an admin API key.
-
-For loopback HTTP development, set `KEYZORI_DASHBOARD_SECURE_COOKIES=false`. Keep it `true` behind production TLS.
-
 ### Stripe configuration is partial
 
 Set both `KEYZORI_STRIPE_SECRET_KEY` and `KEYZORI_STRIPE_WEBHOOK_SECRET`, or remove both. Keyzori intentionally refuses partial configuration instead of exposing a webhook or controls that cannot reconcile safely.
@@ -31,21 +25,7 @@ Set both `KEYZORI_STRIPE_SECRET_KEY` and `KEYZORI_STRIPE_WEBHOOK_SECRET`, or rem
 
 ### Forwarded IPs are wrong
 
-Leave proxy trust disabled unless requests can arrive only through known proxies. When enabled, list the immediate proxy networks in `KEYZORI_TRUSTED_PROXY_CIDRS`; an incorrect value affects IP limits and dashboard login throttling.
-
-## Dashboard
-
-### Login loops or the cookie is missing
-
-Secure cookies require HTTPS. Check proxy scheme/host forwarding, Redis connectivity, browser cookie policy, and the configured session TTL. Dashboard sessions are intentionally independent of `KEYZORI_ADMIN_API_KEY`.
-
-### Live events stop
-
-Confirm the reverse proxy permits `text/event-stream`, disables response buffering, and allows long-lived requests to `/dashboard/api/events`. The browser reconnects automatically and refreshes recent durable activity after reconnection.
-
-### The root route returns 404
-
-This is expected when `KEYZORI_DISABLE_DASHBOARD=true`. No dashboard assets, login, session, JSON, or SSE routes are mounted in that mode.
+Leave proxy trust disabled unless requests can arrive only through known proxies. When enabled, list the immediate proxy networks in `KEYZORI_TRUSTED_PROXY_CIDRS`; an incorrect value affects IP limits.
 
 ## Licenses and SDK
 
@@ -85,7 +65,7 @@ Confirm the endpoint uses its own `whsec_...` signing secret, the proxy does not
 
 ### Access does not match a recent event
 
-Request synchronization from the operator dashboard. Keyzori retrieves current subscription state, so duplicate or out-of-order webhook delivery is not resolved by manually replaying event payloads.
+Request synchronization through `POST /admin/licenses/:id/actions/sync-stripe`. Keyzori retrieves current subscription state, so duplicate or out-of-order webhook delivery is not resolved by manually replaying event payloads.
 
 Manual revocation always wins. Payment recovery clears only a Stripe-originated revocation.
 
