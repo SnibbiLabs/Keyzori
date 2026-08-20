@@ -1,14 +1,10 @@
 <div align="center">
 
-# Keyzori License Manager
+<img width="2560" height="720" alt="banner" src="https://github.com/lilsnibbi/keyzori/docs/img/banner.png" />
 
-**Self-hosted licensing for software products.**
-
-[`Documentation`](docs/README.md) · [`API`](docs/api-reference.md) · [`SDK`](apps/sdk/README.md) · [`Deployment`](docs/deployment.md)
+[`📖 Documentation`](docs/README.md) · [`🌐 API`](docs/api-reference.md) · [`🔧 SDK`](apps/sdk/README.md) · [`💻 Deployment`](docs/deployment.md)
 
 <br />
-
-<code>Bun</code> <code>TypeScript</code> <code>Elysia</code> <code>PostgreSQL</code> <code>Redis</code> <code>Drizzle</code>
 
 </div>
 
