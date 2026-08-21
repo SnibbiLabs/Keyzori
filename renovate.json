@@ -45,6 +45,12 @@
 			"addLabels": ["major-update"]
 		},
 		{
+			"description": "Postgres/Redis: stable numeric tags only, no beta/arch variants",
+			"matchDatasources": ["docker"],
+			"matchPackageNames": ["postgres", "redis"],
+			"ignoreUnstable": true
+		},
+		{
 			"description": "Track drizzle prerelease builds together",
 			"matchPackageNames": ["drizzle-orm", "drizzle-kit"],
 			"groupName": "Drizzle",
