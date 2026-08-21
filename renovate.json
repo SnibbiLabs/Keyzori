@@ -48,7 +48,8 @@
 			"description": "Postgres/Redis: stable numeric tags only, no beta/arch variants",
 			"matchDatasources": ["docker"],
 			"matchPackageNames": ["postgres", "redis"],
-			"ignoreUnstable": true
+			"ignoreUnstable": true,
+			"enabled": false
 		},
 		{
 			"description": "Track drizzle prerelease builds together",
