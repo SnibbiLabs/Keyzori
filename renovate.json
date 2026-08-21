@@ -43,6 +43,14 @@
 			"description": "Highlight major updates",
 			"matchUpdateTypes": ["major"],
 			"addLabels": ["major-update"]
+		},
+		{
+			"description": "Track drizzle prerelease builds together",
+			"matchPackageNames": ["drizzle-orm", "drizzle-kit"],
+			"groupName": "Drizzle",
+			"rangeStrategy": "bump",
+			"followTag": "latest"
 		}
-	]
+	],
+	"ignoreUnstable": false
 }
