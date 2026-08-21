@@ -47,5 +47,5 @@ jobs:
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
           # claude_args: '--allowed-tools Bash(gh pr *)'
-          claude_args: '--append-system-prompt "Never run git commit or git push unless explicitly asked to in this request. Diagnosing and fixing an issue does not imply permission to commit — propose the diff and wait for explicit go-ahead. Keep responses short and direct, no extra jargon — say only whats needed, nothing more."'
+          claude_args: '--allowed-tools "Bash(bun run typecheck),Bash(bun run typecheck:*),Bash(bun run lint),Bash(bun run lint:*),Bash(bun run test),Bash(bun run test:*),Bash(bun run check),Bash(bun run check:*),Bash(bun test),Bash(bun test:*),Bash(biome check),Bash(biome check:*)" --append-system-prompt "Never run git commit or git push unless explicitly asked to in this request. Diagnosing and fixing an issue does not imply permission to commit — propose the diff and wait for explicit go-ahead. Keep responses short and direct, no extra jargon — say only whats needed, nothing more."'
 
