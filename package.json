@@ -27,7 +27,7 @@
 		"sdk",
 		"cli"
 	],
-	"packageManager": ">=bun@1.4.0",
+	"packageManager": "bun@1.4.0",
 	"type": "module",
 	"private": true,
 	"scripts": {
