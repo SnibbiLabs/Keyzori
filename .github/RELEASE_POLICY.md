@@ -25,7 +25,7 @@ A stable release requires:
 
 ## Publishing
 
-The repository publishes `keyzori` to npm, creates a GitHub Release with generated notes, and pushes the unified container to `ghcr.io/lilsnibbi/keyzori`. Releases receive only `v`-prefixed SemVer tags; stable releases also update `latest`, while prereleases never do. A granular npm token with publish access must be stored as the repository secret `NPM_TOKEN`.
+The repository publishes `keyzori` to npm, creates a GitHub Release with generated notes, and pushes the unified container to `ghcr.io/lilsnibbi/keyzori`. Every successful `main` commit updates `canary`. Releases receive only `v`-prefixed SemVer tags; stable releases also update `latest`, while prereleases never do. A granular npm token with publish access must be stored as the repository secret `NPM_TOKEN`.
 
 After the version and changelog are aligned, push the matching tag (for example, `v1.0.0`). The release workflow verifies, builds, integration-tests, and smoke-tests both artifacts before publishing. To repair an existing tag, run the workflow manually and enter that tag. Re-running the same tag is safe when npm already received that version.
 

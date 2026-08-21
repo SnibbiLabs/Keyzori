@@ -88,7 +88,7 @@ The multi-stage build uses version-tagged Bun and distroless base images, a froz
 - committed SQL migrations;
 - `LICENSE` and `NOTICE`.
 
-Every release publishes `ghcr.io/lilsnibbi/keyzori:v<version>`. Stable releases also update `ghcr.io/lilsnibbi/keyzori:latest`; prereleases do not.
+Every release publishes `ghcr.io/lilsnibbi/keyzori:v<version>`. Stable releases also update `ghcr.io/lilsnibbi/keyzori:latest`; prereleases do not. Every successful commit on `main` updates `ghcr.io/lilsnibbi/keyzori:canary`.
 
 ### Publish a version
 
@@ -101,7 +101,7 @@ git push origin main
 git push origin $releaseTag
 ```
 
-Pushing the tag starts the Release workflow. It rejects tags that do not exactly match the package version or whose commit is not on `main`. The workflow creates a GitHub Release with automatically generated notes from the commits and merged pull requests since the previous release; it does not create new commits. A stable tag such as `v1.1.0` publishes `:v1.1.0` and moves `:latest`; a prerelease such as `v1.1.0-rc.1` publishes only its exact version tag.
+Pushing the tag starts the Release workflow. It rejects tags that do not exactly match the package version or whose commit is not on `main`. The workflow creates a GitHub Release with automatically generated notes from the commits and merged pull requests since the previous release; it does not create new commits. A stable tag such as `v1.1.0` publishes `:v1.1.0` and moves `:latest`; a prerelease such as `v1.1.0-rc.1` publishes only its exact version tag. Neither release type changes `:canary`.
 
 To republish or repair an existing tag, open **Actions → Release → Run workflow** and enter the existing `v`-prefixed tag. The tag must already exist in the repository.
 

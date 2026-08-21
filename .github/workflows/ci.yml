@@ -9,6 +9,7 @@ on:
 
 permissions:
   contents: read
+  packages: write
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -157,3 +158,37 @@ jobs:
           curl --fail --silent --show-error http://127.0.0.1:3000/docs/openapi.json >/dev/null
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:3000/)" = "404"
           docker run --rm --network host "${image}" healthcheck
+
+  publish-canary-image:
+    name: Publish canary image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push canary image
+        shell: bash
+        run: |
+          set -euo pipefail
+          repo="ghcr.io/${GITHUB_REPOSITORY,,}"
+          canary_tag="${repo}:canary"
+          sha_tag="${repo}:${GITHUB_SHA}"
+          docker build \
+            --file apps/server/Dockerfile \
+            --label "org.opencontainers.image.source=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${GITHUB_SHA}" \
+            --tag "${canary_tag}" \
+            --tag "${sha_tag}" \
+            .
+          docker push "${canary_tag}"
+          docker push "${sha_tag}"
