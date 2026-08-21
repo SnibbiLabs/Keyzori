@@ -30,5 +30,13 @@
 				"organizeImports": "off"
 			}
 		}
-	}
+	},
+	"overrides": [
+		{
+			"includes": ["renovate.json"],
+			"formatter": {
+				"enabled": false
+			}
+		}
+	]
 }
