@@ -1,6 +1,6 @@
 <div align="center">
 
-<img width="2560" height="720" alt="banner" src="https://github.com/lilsnibbi/keyzori/docs/img/banner.png" />
+<img width="2560" height="720" alt="banner" src="https://github.com/lilsnibbi/Keyzori/blob/main/docs/img/banner.png" />
 
 [`📖 Documentation`](docs/README.md) · [`🌐 API`](docs/api-reference.md) · [`🔧 SDK`](apps/sdk/README.md) · [`💻 Deployment`](docs/deployment.md)
 
