@@ -4,6 +4,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 `AGENTS.md` holds the authoritative working rules (Bun-only toolchain, layer boundaries, security-sensitive areas, style, handoff expectations). Read it. This file covers commands and the architecture those rules protect.
 
+Never `git commit` or `git push` unless the human explicitly asks for it in that request — this applies in every context, including the `Claude Code` GitHub Action running in CI/PRs. Diagnosing and fixing an issue does not imply permission to commit the fix; propose the diff (or leave it uncommitted in the working tree / PR comment) and wait for explicit go-ahead.
+
 ## Commands
 
 Bun 1.3.14+, Turborepo. Never introduce npm/pnpm/yarn, ESLint, or Prettier.

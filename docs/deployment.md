@@ -88,7 +88,7 @@ The multi-stage build uses version-tagged Bun and distroless base images, a froz
 - committed SQL migrations;
 - `LICENSE` and `NOTICE`.
 
-Every release publishes `ghcr.io/lilsnibbi/keyzori:v<version>`. Stable releases also update `ghcr.io/lilsnibbi/keyzori:latest`; prereleases do not.
+Every release publishes `ghcr.io/lilsnibbi/keyzori:v<version>`. Stable releases also update `ghcr.io/lilsnibbi/keyzori:latest`; prereleases do not. Every successful commit on `main` updates `ghcr.io/lilsnibbi/keyzori:canary`.
 
 ### Publish a version
 

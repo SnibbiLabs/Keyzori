@@ -13,7 +13,7 @@ RUN --mount=type=cache,target=/root/.bun/install/cache,sharing=locked \
 COPY apps/server ./apps/server
 RUN bun run --cwd apps/server build
 
-FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
+FROM gcr.io/distroless/cc-debian12:nonroot@sha256:adcd20c7b4c988b73cbfbddb26d2eee574571e6d7c9ffea29b3821e0690efb77 AS runtime
 LABEL org.opencontainers.image.title="Keyzori License Server" \
 	org.opencontainers.image.description="Self-hosted software license management server" \
 	org.opencontainers.image.licenses="Apache-2.0"
